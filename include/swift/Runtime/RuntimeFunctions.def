@@ -2401,7 +2401,7 @@ FUNCTION(TaskSwitchFunc,
          ConcurrencyAvailability,
          RETURNS(VoidTy),
          ARGS(SwiftContextPtrTy, Int8PtrTy, ExecutorFirstTy, ExecutorSecondTy),
-         ATTRS(NoUnwind),
+         ATTRS(NoUnwind, FirstParamSwiftAsync),
          EFFECT(RuntimeEffect::Concurrency),
          UNKNOWN_MEMEFFECTS)
          
@@ -2606,7 +2606,7 @@ FUNCTION(AsyncLetFinish,
               TaskContinuationFunctionPtrTy, // continuation
               SwiftContextPtrTy           // temp context
          ),
-         ATTRS(NoUnwind),
+         ATTRS(NoUnwind, FirstParamSwiftAsync),
          EFFECT(RuntimeEffect::Concurrency),
          UNKNOWN_MEMEFFECTS)
 
