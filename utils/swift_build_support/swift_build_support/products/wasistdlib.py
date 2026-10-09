@@ -158,8 +158,6 @@ class WASIStdlib(cmake_product.CMakeProduct):
         self.cmake_options.define(
             'SWIFT_STDLIB_INSTALL_PARENT_MODULE_FOR_SHIMS:BOOL', 'FALSE')
         self.cmake_options.define('SWIFT_RUNTIME_CRASH_REPORTER_CLIENT:BOOL', 'FALSE')
-        self.cmake_options.define(
-            'SWIFT_STDLIB_SINGLE_THREADED_CONCURRENCY:BOOL', 'TRUE')
         self.cmake_options.define('SWIFT_ENABLE_DISPATCH:BOOL', 'FALSE')
         self.cmake_options.define(
             'SWIFT_STDLIB_SUPPORTS_BACKTRACE_REPORTING:BOOL', 'FALSE')
@@ -219,6 +217,8 @@ class WASIStdlib(cmake_product.CMakeProduct):
 
     def add_extra_cmake_options(self):
         self.cmake_options.define('SWIFT_THREADING_PACKAGE:STRING', 'none')
+        self.cmake_options.define(
+            'SWIFT_STDLIB_SINGLE_THREADED_CONCURRENCY:BOOL', 'TRUE')
 
     def test(self, host_target):
         self._test(host_target, 'wasm32-wasip1')
@@ -309,3 +309,7 @@ class WASIThreadsStdlib(WASIStdlib):
                                   '-Xcc;-mthread-model;-Xcc;posix;'
                                   '-Xcc;-pthread;-Xcc;-ftls-model=local-exec')
         self.cmake_options.define('SWIFT_ENABLE_WASI_THREADS:BOOL', 'TRUE')
+        self.cmake_options.define(
+            'SWIFT_STDLIB_SINGLE_THREADED_CONCURRENCY:BOOL', 'FALSE')
+        self.cmake_options.define('SWIFT_CONCURRENCY_GLOBAL_EXECUTOR:STRING',
+                                  'singlethreaded')
