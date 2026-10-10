@@ -94,6 +94,11 @@ SWIFT_FUNC(ReleaseN, ModRef, release_n)
 
 /// SwiftHeapObject *swift_allocObject(SwiftHeapMetadata *metadata,
 ///                                    size_t size, size_t alignment)
+///
+/// NoModRef except for class field offset globals, which SwiftAA treats as
+/// possibly written (see mayBeRuntimeInitializedFieldOffset in
+/// LLVMSwiftAA.cpp). Any NoModRef entry point added here that returns a new
+/// instance needs the same exception.
 SWIFT_NEVER_NONATOMIC_FUNC(AllocObject, NoModRef, allocObject)
 
 /// void objc_release(%objc_object* %P)
