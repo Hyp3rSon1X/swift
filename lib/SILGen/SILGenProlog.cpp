@@ -1698,8 +1698,21 @@ uint16_t SILGenFunction::emitBasicProlog(
   emitIndirectResultParameters(*this, resultType, origResultType, DC);
 
   std::optional<AbstractionPattern> origErrorType;
-  if (origClosureType && !origClosureType->isTypeParameterOrOpaqueArchetype() &&
+  if (origClosureType && origClosureType->isTypeParameterOrOpaqueArchetype() &&
       !origClosureType->isClangType()) {
+    // A closure emitted directly at a fully opaque abstraction pattern, such
+    // as a closure literal passed as an argument of generic type `T`, is
+    // lowered with the most general form of its function type, which throws
+    // any error type other than `any Error` indirectly. Use the same
+    // abstraction pattern for the thrown error as getSILFunctionType, so
+    // that the prolog agrees with the lowered function type.
+    if (errorType) {
+      auto optPair =
+          origClosureType->getFunctionThrownErrorType(TypeContext->FormalType);
+      assert(optPair && "throwing closure has a non-throwing formal type");
+      origErrorType = optPair->first;
+    }
+  } else if (origClosureType && !origClosureType->isClangType()) {
     origErrorType = origClosureType->getFunctionThrownErrorType();
     if (origErrorType && !errorType)
       errorType = origErrorType->getEffectiveThrownErrorType();
