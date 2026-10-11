@@ -7727,30 +7727,92 @@ static ActorIsolation getRealActorIsolationOfContext(DeclContext *DC) {
   }
 }
 
+/// Convert an isolation value of the single-level optional type
+/// \p sourceType to the contextual type of `#isolation`.
+static ManagedValue emitIsolationConversion(SILGenFunction &SGF,
+                                            SILLocation loc, ManagedValue value,
+                                            CanType sourceType,
+                                            CanType resultType) {
+  if (sourceType == resultType)
+    return value;
+
+  // Like the type checker, convert to a more optional type by injecting the
+  // value; reabstraction would turn `nil` into the outermost `nil` instead.
+  auto resultObjectType = resultType.getOptionalObjectType();
+  if (resultObjectType && resultObjectType.getOptionalObjectType()) {
+    auto convertObject = [&](SGFContext) {
+      return emitIsolationConversion(SGF, loc, value, sourceType,
+                                     resultObjectType);
+    };
+    return SGF.emitInjectOptional(loc, SGF.getTypeLowering(resultType),
+                                  SGFContext(), convertObject);
+  }
+
+  return SGF.emitTransformedValue(loc, value, sourceType, resultType);
+}
+
 RValue RValueEmitter::visitCurrentContextIsolationExpr(
     CurrentContextIsolationExpr *E, SGFContext C) {
 
   auto isolation = getRealActorIsolationOfContext(SGF.FunctionDC);
+
+  // `#isolation` takes its type from context, but the isolation values we
+  // synthesize below have the opaque isolation type `(any Actor)?`; they have
+  // to be converted to the type of the expression, e.g. `AnyObject?` or `Any`.
+  auto resultType = E->getType()->getCanonicalType();
+  auto opaqueIsolationType =
+      SILType::getOpaqueIsolationType(SGF.getASTContext()).getASTType();
 
   if (isolation == ActorIsolation::NonisolatedNonsending) {
     auto *isolatedArg = SGF.F.maybeGetIsolatedArgument();
     assert(isolatedArg &&
            "Caller Isolation Inheriting without isolated parameter");
     auto isolatedMV = ManagedValue::forBorrowedRValue(isolatedArg);
-    return RValue(
-        SGF, E, SGF.B.createImplicitActorToOpaqueIsolationCast(E, isolatedMV));
+    auto isolationValue =
+        SGF.B.createImplicitActorToOpaqueIsolationCast(E, isolatedMV);
+    // The cast borrows the guaranteed isolated parameter; copy it unless the
+    // context accepts a +0 value, so that consuming the result does not
+    // release the caller's actor.
+    if (!C.isGuaranteedPlusZeroOk())
+      isolationValue = isolationValue.copy(SGF, E);
+    // The type checker only accepts contextual types that `(any Actor)?`
+    // converts to here.
+    return RValue(SGF, E,
+                  emitIsolationConversion(SGF, E, isolationValue,
+                                          opaqueIsolationType, resultType));
   }
 
   if (isolation == ActorIsolation::ActorInstance) {
     auto ctor = dyn_cast<ConstructorDecl>(SGF.FunctionDC);
+    // Only optional types (and `Any`) can represent the flow-sensitive
+    // isolation value, which is nil until `self` is initialized.
     if (ctor && ctor->isDesignatedInit() &&
-        isolation.getActorInstance() == ctor->getImplicitSelfDecl()) {
+        isolation.getActorInstance() == ctor->getImplicitSelfDecl() &&
+        (resultType.getOptionalObjectType() || resultType->isAny())) {
       // If we are in an actor initializer that is isolated to self, the
       // current isolation is flow-sensitive; use that instead of the
       // synthesized expression.
-      auto isolationValue =
-        SGF.emitFlowSensitiveSelfIsolation(E, isolation);
-      return RValue(SGF, E, isolationValue);
+      auto isolationValue = SGF.emitFlowSensitiveSelfIsolation(E, isolation);
+      if (resultType == opaqueIsolationType)
+        return RValue(SGF, E, isolationValue);
+
+      // Otherwise, the type checker converted the synthesized expression,
+      // `self` (or `self.asLocalActor` for a distributed actor, which has type
+      // `any Actor`), to the contextual type. The flow-sensitive value is
+      // either nil or `self`, so cast it back to an optional of the actor type
+      // and convert from there.
+      CanType sourceType = opaqueIsolationType;
+      if (!isolation.isDistributedActor()) {
+        auto actorType = isolation.getActorInstance()
+                             ->getTypeInContext()
+                             ->getCanonicalType();
+        sourceType = OptionalType::get(actorType)->getCanonicalType();
+        isolationValue = SGF.B.createUncheckedRefCast(
+            E, isolationValue, SGF.getLoweredType(sourceType));
+      }
+      return RValue(SGF, E,
+                    emitIsolationConversion(SGF, E, isolationValue, sourceType,
+                                            resultType));
     }
   }
 

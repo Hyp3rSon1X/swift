@@ -4371,12 +4371,24 @@ namespace {
       case ActorIsolation::NonisolatedUnsafe:
         actorExpr = new (ctx) NilLiteralExpr(loc, /*implicit=*/false);
         break;
-      case ActorIsolation::NonisolatedNonsending:
+      case ActorIsolation::NonisolatedNonsending: {
         // For caller isolation this expression will be replaced in SILGen
         // because we're adding an implicit isolated parameter that #isolated
         // must resolve to, but cannot do so during AST expansion quite yet.
-        actorExpr = new (ctx) NilLiteralExpr(loc, /*implicit=*/false);
+        // SILGen produces a value of type `(any Actor)?` and converts it to
+        // the contextual type, so type the placeholder the same way to reject
+        // contextual types it cannot be converted to.
+        auto *actorProto = ctx.getProtocol(KnownProtocolKind::Actor);
+        actorExpr = CoerceExpr::createImplicit(
+            ctx, new (ctx) NilLiteralExpr(loc, /*implicit=*/false),
+            OptionalType::get(actorProto->getDeclaredExistentialType()));
+        // Converting the optional placeholder to `Any` would warn about an
+        // implicit Optional-to-Any coercion inside the macro expansion, which
+        // the user cannot silence. Make the coercion explicit.
+        if (isolationType && isolationType->isAny())
+          actorExpr = CoerceExpr::createImplicit(ctx, actorExpr, isolationType);
         break;
+      }
       }
 
 
