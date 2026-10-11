@@ -3027,6 +3027,21 @@ public:
     if (auto optPair = pattern.getFunctionThrownErrorType(func)) {
       auto errorPattern = optPair->first;
       auto errorType = optPair->second;
+
+      // If the abstraction pattern asks for an existential error, a concrete
+      // error type thrown by the substituted function is type-erased; this
+      // must agree with the lowering of the thrown error in
+      // getSILFunctionType. Otherwise, a closure literal with a typed throws
+      // clause that is emitted directly at an untyped `throws` abstraction
+      // pattern would be lowered with the concrete error type, while SILGen
+      // emits its body against the erased error type.
+      if (!errorPattern.isTypeParameterOrOpaqueArchetype() &&
+          !errorPattern.isTuple() &&
+          errorPattern.getType()->isExistentialType() &&
+          !errorPattern.getType()->hasTypeParameter()) {
+        errorType = errorPattern.getType();
+      }
+
       newErrorType = visit(errorType, errorPattern);
     }
 
