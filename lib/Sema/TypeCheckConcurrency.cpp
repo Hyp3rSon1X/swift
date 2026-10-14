@@ -4243,6 +4243,19 @@ namespace {
 
       if (auto *isolation = dyn_cast<CurrentContextIsolationExpr>(expr)) {
         recordCurrentContextIsolation(isolation);
+
+        // In nonisolated(nonsending) code, the actor expression is only a
+        // typed placeholder that does not identify an actor; SILGen evaluates
+        // #isolation to the implicit isolated parameter, i.e. the isolation
+        // of the caller. Return the #isolation expression itself, which is
+        // known to be the isolation of the current context.
+        if (isolation->getActor() &&
+            getActorIsolationOfContext(
+                const_cast<DeclContext *>(getDeclContext()),
+                getClosureActorIsolation)
+                .isNonisolatedNonsending())
+          return isolation;
+
         return isolation->getActor();
       }
 
