@@ -42,6 +42,7 @@ GROUP(no_group,none,"")
 
 GROUP(ActorIsolatedCall,none,"actor-isolated-call")
 GROUP(ActorIsolatedMutatingAsync,none,"actor-isolated-mutating-async")
+GROUP(ActorIsolatedOptionalChainSuspension,none,"actor-isolated-optional-chain-suspension")
 GROUP(AddPreconcurrencyImport,none,"add-preconcurrency-import")
 GROUP(AlwaysAvailableDomain,none,"always-available-domain")
 GROUP(AlwaysUnsafe,none,"always-unsafe")

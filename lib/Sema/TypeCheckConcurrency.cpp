@@ -729,6 +729,84 @@ static bool isAsyncCall(
   return lookup->getDecl().getDecl()->isAsync();
 }
 
+/// Return true if evaluating the given expression itself (not counting its
+/// subexpressions) is a potential suspension point.
+///
+/// Note that this must be called after the implicitlyAsync flags have been
+/// set.
+static bool isPotentialSuspensionPoint(Expr *expr) {
+  if (auto *apply = dyn_cast<ApplyExpr>(expr))
+    return isAsyncCall(apply);
+
+  if (auto *lookup = dyn_cast<LookupExpr>(expr))
+    return isAsyncCall(lookup);
+
+  if (auto *declRef = dyn_cast<DeclRefExpr>(expr)) {
+    if (declRef->isImplicitlyAsync())
+      return true;
+    // Reading an 'async let' waits for its task; reading a variable with an
+    // 'async' getter calls it. A reference to an async function does not
+    // suspend by itself.
+    if (auto *var = dyn_cast_or_null<VarDecl>(declRef->getDecl()))
+      return var->isAsyncLet() || var->isAsync();
+    return false;
+  }
+
+  if (auto *defaultArg = dyn_cast<DefaultArgumentExpr>(expr))
+    return defaultArg->isImplicitlyAsync();
+
+  return false;
+}
+
+/// Find the first potential suspension point that is evaluated as part of the
+/// given expression.
+///
+/// \returns the outermost 'await' within \p expr that covers the suspension
+/// point, or the suspension point itself if the covering 'await' is outside
+/// of \p expr; \c nullptr if evaluating \p expr cannot suspend.
+static Expr *findPotentialSuspensionPoint(Expr *expr) {
+  class SuspensionPointFinder : public ASTWalker {
+    SmallVector<AwaitExpr *, 2> awaitStack;
+
+  public:
+    Expr *found = nullptr;
+
+    MacroWalking getMacroWalkingBehavior() const override {
+      return MacroWalking::Expansion;
+    }
+
+    PreWalkResult<Expr *> walkToExprPre(Expr *expr) override {
+      // Closure bodies are not evaluated in place. A closure that is called
+      // in place can only suspend if the call itself is async, which is
+      // found at the call.
+      if (isa<AbstractClosureExpr>(expr))
+        return Action::SkipNode(expr);
+
+      if (auto *await = dyn_cast<AwaitExpr>(expr)) {
+        awaitStack.push_back(await);
+        return Action::Continue(expr);
+      }
+
+      if (isPotentialSuspensionPoint(expr)) {
+        found = awaitStack.empty() ? expr : awaitStack.front();
+        return Action::Stop();
+      }
+
+      return Action::Continue(expr);
+    }
+
+    PostWalkResult<Expr *> walkToExprPost(Expr *expr) override {
+      if (isa<AwaitExpr>(expr))
+        awaitStack.pop_back();
+      return Action::Continue(expr);
+    }
+  };
+
+  SuspensionPointFinder finder;
+  expr->walk(finder);
+  return finder.found;
+}
+
 /// Determine whether we should diagnose data races within the current context.
 ///
 /// By default, we do this only in code that makes use of concurrency
@@ -3496,8 +3574,16 @@ namespace {
       }
 
       if (auto *apply = dyn_cast<ApplyExpr>(expr)) {
+        diagnoseOptionalChainMutatingCall(apply);
+
         assert(cast<ApplyExpr *>(applyStack.back()) == apply);
         applyStack.pop_back();
+      }
+
+      if (auto *assign = dyn_cast<AssignExpr>(expr)) {
+        if (assign->getDest() && assign->getSrc())
+          diagnoseOptionalChainMutationAcrossSuspension(assign->getDest(),
+                                                        {assign->getSrc()});
       }
 
       // Clear out the mutable local variable parent map on the way out.
@@ -3915,6 +4001,233 @@ namespace {
       };
       arg->getSubExpr()->forEachChildExpr(findIsolatedState);
       return result;
+    }
+
+    /// If \p expr is a component of an lvalue access path, return the
+    /// expression it accesses storage within, or \c nullptr if there is none.
+    Expr *getAccessPathBase(Expr *expr) const {
+      if (auto *lookup = dyn_cast<LookupExpr>(expr))
+        return lookup->getBase();
+      if (auto *force = dyn_cast<ForceValueExpr>(expr))
+        return force->getSubExpr();
+      if (auto *bind = dyn_cast<BindOptionalExpr>(expr))
+        return bind->getSubExpr();
+      if (auto *optEval = dyn_cast<OptionalEvaluationExpr>(expr))
+        return optEval->getSubExpr();
+      if (auto *tupleElt = dyn_cast<TupleElementExpr>(expr))
+        return tupleElt->getBase();
+      if (auto *keyPathApply = dyn_cast<KeyPathApplicationExpr>(expr))
+        return keyPathApply->getBase();
+      if (auto *inout = dyn_cast<InOutExpr>(expr))
+        return inout->getSubExpr();
+      if (auto *abiSafe = dyn_cast<ABISafeConversionExpr>(expr))
+        return abiSafe->getSubExpr();
+      if (auto *openExistential = dyn_cast<OpenExistentialExpr>(expr))
+        return openExistential->getSubExpr();
+      if (auto *opaqueValue = dyn_cast<OpaqueValueExpr>(expr)) {
+        for (const auto &known : opaqueValues) {
+          if (known.first == opaqueValue)
+            return known.second;
+        }
+      }
+      return nullptr;
+    }
+
+    /// Find the storage at the root of the given lvalue access path, i.e.,
+    /// the variable, or the property or subscript of a reference or metatype
+    /// base, that every other access in the path is nested within.
+    ///
+    /// If that storage belongs to an instance of a non-Sendable class, the
+    /// reference to the instance is followed in the same way: the instance
+    /// is protected by the actor when the reference is actor-isolated state.
+    ///
+    /// \returns the actor-isolated storage the access is reached from if it
+    /// is isolated to the actor of the current context, \c nullptr otherwise.
+    ValueDecl *getActorIsolatedAccessRoot(Expr *lvalue) {
+      Expr *path = lvalue;
+      auto useKind = VarRefUseEnv::Mutating;
+      while (true) {
+        Expr *root = path->getSemanticsProvidingExpr();
+        while (Expr *base = getAccessPathBase(root)) {
+          base = base->getSemanticsProvidingExpr();
+          // A base that is not an lvalue (e.g. a class or actor reference)
+          // is not part of the access. Mutating accessors take an lvalue
+          // base inout.
+          if (!base->getType() || !(base->getType()->is<LValueType>() ||
+                                    base->getType()->is<InOutType>()))
+            break;
+          root = base;
+        }
+
+        ConcreteDeclRef declRef;
+        Expr *base = nullptr;
+        if (auto *declRefExpr = dyn_cast<DeclRefExpr>(root)) {
+          declRef = declRefExpr->getDeclRef();
+        } else if (auto *lookup = dyn_cast<LookupExpr>(root)) {
+          declRef = lookup->getMember();
+          base = lookup->getBase();
+        }
+
+        auto *storage =
+            dyn_cast_or_null<AbstractStorageDecl>(declRef.getDecl());
+        if (!storage)
+          return nullptr;
+
+        std::optional<ReferencedActor> isolatedActor;
+        if (base)
+          isolatedActor.emplace(getIsolatedActor(base));
+        auto result = ActorReferenceResult::forReference(
+            declRef, root->getLoc(), getDeclContext(), useKind, isolatedActor,
+            std::nullopt, std::nullopt, getClosureActorIsolation);
+        if (result == ActorReferenceResult::SameConcurrencyDomain &&
+            result.isolation.isActorIsolated())
+          return storage;
+
+        // Follow the reference to a non-Sendable class instance. Sendable
+        // classes protect their own state.
+        if (!base || !base->getType())
+          return nullptr;
+        Type refType = base->getType()->getRValueType();
+        if (!refType->getClassOrBoundGenericClass() ||
+            refType->isSendableType())
+          return nullptr;
+
+        path = base;
+        while (true) {
+          path = path->getSemanticsProvidingExpr();
+          if (auto *load = dyn_cast<LoadExpr>(path))
+            path = load->getSubExpr();
+          else if (auto *derivedToBase = dyn_cast<DerivedToBaseExpr>(path))
+            path = derivedToBase->getSubExpr();
+          else if (auto *bind = dyn_cast<BindOptionalExpr>(path))
+            path = bind->getSubExpr();
+          else if (auto *force = dyn_cast<ForceValueExpr>(path))
+            path = force->getSubExpr();
+          else
+            break;
+        }
+        useKind = VarRefUseEnv::Read;
+      }
+    }
+
+    /// Diagnose a mutation through an optional chain whose access to
+    /// actor-isolated state is held across a potential suspension point.
+    ///
+    /// Optional chaining has to bind the base before it knows whether the
+    /// rest of the expression is evaluated at all, so the access to the base
+    /// begins at the '?' and lasts until the mutation completes. Anything
+    /// evaluated in between that suspends lets other tasks run on the actor
+    /// while the access is in progress, and dynamic exclusivity checking does
+    /// not catch conflicts between tasks. For example, the '_modify' accessor
+    /// of a Dictionary subscript has moved the value out of its storage, so
+    /// any other change to the dictionary is overwritten or corrupted when the
+    /// access ends.
+    ///
+    /// \param lvalue The storage that is mutated.
+    /// \param laterOperands The operands of the mutation that are evaluated
+    /// after the storage, e.g. the source of an assignment.
+    ///
+    /// \returns true if a diagnostic was emitted.
+    bool diagnoseOptionalChainMutationAcrossSuspension(
+        Expr *lvalue, ArrayRef<Expr *> laterOperands) {
+      // Walk the access path from the outside in. Subscript indices outside
+      // of a '?' are evaluated after it. The innermost '?' that binds
+      // actor-isolated storage is where the access begins.
+      SmallVector<Expr *, 4> operands(laterOperands.begin(),
+                                      laterOperands.end());
+      BindOptionalExpr *accessBind = nullptr;
+      ValueDecl *storage = nullptr;
+      unsigned numOperandsAfterAccess = 0;
+      for (Expr *component = lvalue->getSemanticsProvidingExpr(); component;) {
+        if (auto *bind = dyn_cast<BindOptionalExpr>(component)) {
+          Expr *subExpr = bind->getSubExpr();
+          if (subExpr->getType() && subExpr->getType()->is<LValueType>()) {
+            if (auto *root = getActorIsolatedAccessRoot(subExpr)) {
+              accessBind = bind;
+              storage = root;
+              numOperandsAfterAccess = operands.size();
+            }
+          }
+        } else if (auto *subscript = dyn_cast<SubscriptExpr>(component)) {
+          for (auto arg : *subscript->getArgs())
+            operands.push_back(arg.getExpr());
+        } else if (auto *subscript = dyn_cast<DynamicSubscriptExpr>(component)) {
+          for (auto arg : *subscript->getArgs())
+            operands.push_back(arg.getExpr());
+        } else if (auto *keyPathApply =
+                       dyn_cast<KeyPathApplicationExpr>(component)) {
+          operands.push_back(keyPathApply->getKeyPath());
+        }
+
+        Expr *base = getAccessPathBase(component);
+        component = base ? base->getSemanticsProvidingExpr() : nullptr;
+      }
+
+      if (!accessBind)
+        return false;
+
+      Expr *suspension = nullptr;
+      for (auto *operand :
+           ArrayRef<Expr *>(operands).take_front(numOperandsAfterAccess)) {
+        if ((suspension = findPotentialSuspensionPoint(operand)))
+          break;
+      }
+      if (!suspension)
+        return false;
+
+      ctx.Diags
+          .diagnose(suspension->getLoc(),
+                    diag::actor_isolated_optional_chain_suspension, storage)
+          .warnUntilLanguageMode(LanguageMode::future);
+      ctx.Diags.diagnose(accessBind->getLoc(),
+                         diag::actor_isolated_optional_chain_access_note,
+                         storage);
+      ctx.Diags.diagnose(suspension->getLoc(),
+                         diag::actor_isolated_optional_chain_hoist_note);
+      return true;
+    }
+
+    /// Diagnose a synchronous call that mutates actor-isolated state through
+    /// an optional chain while one of its later arguments suspends, e.g.
+    /// `dict[key]?.append(await value())` or `dict[key]?.count += await n()`.
+    void diagnoseOptionalChainMutatingCall(ApplyExpr *apply) {
+      // Self applications are checked with the call that applies them.
+      if (isa<SelfApplyExpr>(apply))
+        return;
+
+      // Passing actor-isolated state inout to an async call, including
+      // calling an async mutating method on it, is diagnosed elsewhere.
+      if (isAsyncCall(apply))
+        return;
+
+      SmallVector<Expr *, 4> args;
+      for (auto arg : *apply->getArgs())
+        args.push_back(arg.getExpr());
+
+      // The 'self' of a mutating method is accessed before any of the
+      // arguments are evaluated.
+      Expr *fn = apply->getFn()->getSemanticsProvidingExpr();
+      while (auto *conversion = dyn_cast<ImplicitConversionExpr>(fn))
+        fn = conversion->getSubExpr()->getSemanticsProvidingExpr();
+      if (auto *selfApply = dyn_cast<SelfApplyExpr>(fn)) {
+        if (auto *inout = dyn_cast<InOutExpr>(
+                selfApply->getBase()->getSemanticsProvidingExpr())) {
+          if (diagnoseOptionalChainMutationAcrossSuspension(
+                  inout->getSubExpr(), args))
+            return;
+        }
+      }
+
+      // An inout argument is accessed before the arguments after it are
+      // evaluated.
+      for (unsigned i : indices(args)) {
+        if (auto *inout =
+                dyn_cast<InOutExpr>(args[i]->getSemanticsProvidingExpr())) {
+          if (diagnoseOptionalChainMutationAcrossSuspension(
+                  inout->getSubExpr(), ArrayRef<Expr *>(args).drop_front(i + 1)))
+            return;
+        }
+      }
     }
 
     enum class AsyncMarkingResult {
