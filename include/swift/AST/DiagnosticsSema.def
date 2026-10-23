@@ -5944,6 +5944,18 @@ GROUPED_ERROR(actor_isolated_mutating_func,ActorIsolatedMutatingAsync,none,
 NOTE(actor_isolated_mutating_func_note,none,
       "%0 can be concurrently accessed during mutation, risking data races",
       (const ValueDecl *))
+GROUPED_ERROR(actor_isolated_optional_chain_suspension,ActorIsolatedOptionalChainSuspension,none,
+      "actor-isolated %kind0 is accessed across a suspension point in an "
+      "optional-chained mutation; the mutation may lose concurrent updates",
+      (const ValueDecl *))
+NOTE(actor_isolated_optional_chain_access_note,none,
+      "optional chaining begins the access to %0 here, before the suspension "
+      "point",
+      (const ValueDecl *))
+NOTE(actor_isolated_optional_chain_hoist_note,none,
+      "move the 'await' into a local constant before the optional-chained "
+      "mutation",
+      ())
 GROUPED_ERROR(actor_isolated_call,ActorIsolatedCall,none,
       "call to %0 function in a synchronous %1 context",
       (ActorIsolation, ActorIsolation))

@@ -101,6 +101,7 @@ Or upgrade all warnings except deprecated declaration to errors:
 - <doc:module-not-testable>
 - <doc:module-self-import>
 - <doc:multiple-inheritance>
+- <doc:actor-isolated-optional-chain-suspension>
 - <doc:nominal-types>
 - <doc:non-sendable-types-and-objective-c-interoperability>
 - <doc:non-sendable-values-in-async-conformances-and-overrides>
