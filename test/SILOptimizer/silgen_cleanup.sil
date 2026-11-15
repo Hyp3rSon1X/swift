@@ -398,6 +398,45 @@ sil [ossa] @narrowLoadThroughProjectionSequence : $@convention(thin) () -> () {
   return %retval : $()
 }
 
+struct NCWithRef: ~Copyable {
+  var i: Int
+  let k: Klass
+}
+
+// Thread Sanitizer instrumentation of the access (as emitted by SILGen for a
+// noncopyable stored property under -sanitize=thread) must not prevent
+// narrowing the load to the accessed field. Static exclusivity diagnostics
+// rely on the narrowed load to see a read of 'k' rather than of the whole
+// struct.
+//
+// CHECK-LABEL: sil [ossa] @narrowLoadInTSanInstrumentedAccess : {{.*}} {
+// CHECK:         [[ACCESS:%[^,]+]] = begin_access [read] [unknown] %0
+// CHECK:         builtin "tsanInoutAccess"([[ACCESS]] : $*NCWithRef) : $()
+// CHECK:         [[FIELD_ADDR:%[^,]+]] = struct_element_addr [[ACCESS]] : $*NCWithRef, #NCWithRef.k
+// CHECK:         [[FIELD:%[^,]+]] = load_borrow {{.*}}[[FIELD_ADDR]] : $*Klass
+// CHECK-NOT:     struct_extract
+// CHECK:         ref_element_addr [[FIELD]] : $Klass, #Klass.property
+// CHECK:         end_borrow [[FIELD]]
+// CHECK:         end_access [[ACCESS]]
+// CHECK-LABEL: } // end sil function 'narrowLoadInTSanInstrumentedAccess'
+sil [ossa] @narrowLoadInTSanInstrumentedAccess : $@convention(thin) (@inout NCWithRef) -> () {
+bb0(%0 : $*NCWithRef):
+  %1 = begin_access [read] [unknown] %0 : $*NCWithRef
+  %2 = builtin "tsanInoutAccess"(%1 : $*NCWithRef) : $()
+  %3 = load_borrow [unchecked] %1 : $*NCWithRef
+  %4 = struct_extract %3 : $NCWithRef, #NCWithRef.k
+  %5 = ref_element_addr %4 : $Klass, #Klass.property
+  %6 = begin_access [modify] [dynamic] %5 : $*Builtin.Int64
+  %7 = builtin "tsanInoutAccess"(%6 : $*Builtin.Int64) : $()
+  %8 = integer_literal $Builtin.Int64, 1
+  store %8 to [trivial] %6 : $*Builtin.Int64
+  end_access %6 : $*Builtin.Int64
+  end_borrow %3 : $NCWithRef
+  end_access %1 : $*NCWithRef
+  %retval = tuple ()
+  return %retval : $()
+}
+
 // CHECK-LABEL: sil [ossa] @nondestructive_scoped_access : {{.*}} {
 // CHECK:       bb0(%0 : $*NonDestructive<T>):
 // CHECK:         [[MARK_0:%.*]] = mark_unresolved_non_copyable_value [no_consume_or_assign] %0

@@ -114,3 +114,41 @@ func testInstrumentNonEmptyStruct() {
 // CHECK-LLVM-IR: tsan_external_write
   s.mutate()
 }
+
+final class FinalClass {
+  var storedProperty: Int = 0
+}
+
+// A stored property of a noncopyable struct is projected by borrowing the
+// loaded struct value. Only the addresses involved are instrumented: the read
+// access of 'self' and the access to the class stored property, but not the
+// borrowed struct value or the class reference extracted from it.
+//
+// Instrumenting the borrowed value used to pass its first scalar (here, the
+// trivial 'n') to the TSan runtime as an address, which produced invalid IR.
+
+// CHECK-LABEL: sil hidden [ossa] @$s20tsan_instrumentation26NoncopyableWithLetClassRefV013mutateThroughE0yyF : $@convention(method) (@inout NoncopyableWithLetClassRef) -> () {
+// CHECK:  [[READ:%.*]] = begin_access [read] [unknown] {{%.*}} : $*NoncopyableWithLetClassRef
+// CHECK:  {{%.*}} = builtin "tsanInoutAccess"([[READ]] : $*NoncopyableWithLetClassRef) : $()
+// CHECK:  [[BORROW:%.*]] = load_borrow [unchecked] [[READ]] : $*NoncopyableWithLetClassRef
+// CHECK-NOT: tsanInoutAccess
+// CHECK:  [[REF:%.*]] = struct_extract [[BORROW]] : $NoncopyableWithLetClassRef, #NoncopyableWithLetClassRef.c
+// CHECK-NOT: tsanInoutAccess
+// CHECK:  [[ELEMENT_ADDR:%.*]] = ref_element_addr [[REF]] : $FinalClass, #FinalClass.storedProperty
+// CHECK-NOT: tsanInoutAccess
+// CHECK:  [[WRITE:%.*]] = begin_access [modify] [dynamic] [[ELEMENT_ADDR]] : $*Int
+// CHECK:  {{%.*}} = builtin "tsanInoutAccess"([[WRITE]] : $*Int) : $()
+// CHECK:  [[TAKES_INOUT_FUNC:%.*]] = function_ref @$s20tsan_instrumentation10takesInoutyySizF : $@convention(thin) (@inout Int) -> ()
+// CHECK:  {{%.*}} = apply [[TAKES_INOUT_FUNC]]([[WRITE]]) : $@convention(thin) (@inout Int) -> ()
+// CHECK-LABEL: } // end sil function '$s20tsan_instrumentation26NoncopyableWithLetClassRefV013mutateThroughE0yyF'
+
+// CHECK-LLVM-IR-LABEL: define {{.*}}NoncopyableWithLetClassRefV013mutateThroughE0yyF
+// CHECK-LLVM-IR: call {{.*}}__tsan_external_write
+struct NoncopyableWithLetClassRef: ~Copyable {
+  var n: Int = 0
+  let c: FinalClass
+
+  mutating func mutateThroughLet() {
+    takesInout(&c.storedProperty)
+  }
+}
