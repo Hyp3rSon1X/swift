@@ -1834,3 +1834,47 @@ bb5:
 bb6:
   unreachable
 }
+
+// The error block of a try_apply whose callee cannot actually throw ends in
+// `unreachable`. A noncopyable inout parameter is live there, so none of its
+// fields may be destroyed before the `unreachable`. Copyable inout parameters
+// get no destroy on this path either. Once the function was inlined, such a
+// destroy became a `load [take]` of the field inside a `load_borrow` scope of
+// the same field in the caller, which the SIL verifier rejects.
+
+struct InoutDeadEndPair: ~Copyable {
+  let k: CopyableKlass
+  var i: Int
+}
+
+sil @throwing_use_klass : $@convention(thin) (@guaranteed CopyableKlass) -> (Int, @error any Error)
+
+// CHECK-LABEL: sil [ossa] @dead_block_deferred_deinit_try_apply_error : $@convention(method) (@inout InoutDeadEndPair) -> Int {
+// CHECK:         try_apply {{%.*}}({{%.*}}) : {{.*}}, normal bb1, error bb2
+// CHECK:       bb1({{%.*}} : $Int):
+// CHECK-NOT:     destroy_addr
+// CHECK:         return
+// CHECK:       bb2({{%.*}} : @owned $any Error):
+// CHECK-NOT:     destroy_addr
+// CHECK:         unreachable
+// CHECK-LABEL: } // end sil function 'dead_block_deferred_deinit_try_apply_error'
+sil [ossa] @dead_block_deferred_deinit_try_apply_error : $@convention(method) (@inout InoutDeadEndPair) -> Int {
+bb0(%0 : $*InoutDeadEndPair):
+  %1 = mark_unresolved_non_copyable_value [consumable_and_assignable] %0
+  %2 = begin_access [read] [unknown] %1
+  %3 = struct_element_addr %2, #InoutDeadEndPair.k
+  %4 = load_borrow %3
+  %5 = function_ref @throwing_use_klass : $@convention(thin) (@guaranteed CopyableKlass) -> (Int, @error any Error)
+  try_apply %5(%4) : $@convention(thin) (@guaranteed CopyableKlass) -> (Int, @error any Error), normal bb1, error bb2
+
+bb1(%7 : $Int):
+  end_borrow %4
+  end_access %2
+  return %7
+
+bb2(%10 : @owned $any Error):
+  destroy_value [dead_end] %10
+  end_borrow %4
+  end_access %2
+  unreachable
+}
