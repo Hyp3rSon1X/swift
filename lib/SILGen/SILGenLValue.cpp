@@ -5800,8 +5800,16 @@ static ManagedValue drillIntoComponent(SILGenFunction &SGF,
   bool isRValue = component.isRValue();
   ManagedValue addr = std::move(component).project(SGF, loc, base);
 
+  // Only instrument addresses. Some components project an object, e.g. a
+  // stored property of a noncopyable struct, which is reached by borrowing the
+  // loaded struct value. Objects are SSA values, not memory: the access to the
+  // memory they came from is instrumented at its address. Instrumenting the
+  // object would pass one of its scalars to the TSan runtime as an address, and
+  // would keep SILGenCleanup from narrowing the load to the accessed field,
+  // which static exclusivity diagnostics rely on.
   if ((SGF.getModule().getOptions().Sanitizers & SanitizerKind::Thread) &&
-      tsanKind == TSanKind::InoutAccess && !isRValue) {
+      tsanKind == TSanKind::InoutAccess && !isRValue &&
+      addr.getType().isAddress()) {
     emitTsanInoutAccess(SGF, loc, addr);
   }
 
