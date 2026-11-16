@@ -54,3 +54,29 @@ func testUBPStorageEscape(array: [Int64]) {
   } // expected-note{{this use causes the lifetime-dependent value to escape}}
   read(span)
 }
+
+// =============================================================================
+// Spans of a throwing call's result
+// =============================================================================
+
+enum MakeError: Error { case failed }
+
+func makeArray(_ n: Int) throws -> [Int] { Array(repeating: 1, count: n) }
+
+func makeArrayTyped(_ n: Int) throws(MakeError) -> [Int] { Array(repeating: 1, count: n) }
+
+func total(_ span: Span<Int>) -> Int {
+  var sum = 0
+  for i in span.indices { sum += span[i] }
+  return sum
+}
+
+// The array is the normal result of a try_apply. Its lifetime is extended over the span's use only on the normal
+// path; the error path must not destroy it (swiftlang/swift#92412).
+func testThrowingResultSpan(n: Int) throws -> Int {
+  total(try makeArray(n).span)
+}
+
+func testTypedThrowingResultBytes(n: Int) throws(MakeError) {
+  read(try makeArrayTyped(n).span.bytes)
+}
