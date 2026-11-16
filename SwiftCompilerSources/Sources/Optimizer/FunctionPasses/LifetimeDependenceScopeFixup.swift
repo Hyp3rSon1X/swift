@@ -416,9 +416,12 @@ private struct ExtendableScope {
     case let .stackTemporary(initializingStore):
       return initializingStore
     case let .owned(value):
-      if let definingInst = value.definingInstructionOrTerminator {
+      if let definingInst = value.definingInstruction {
         return definingInst
       }
+      // A block argument, including a terminator result such as a try_apply's normal result, is defined at the start
+      // of its block. Beginning the scope at the terminator would make the terminator's other successors, such as the
+      // try_apply's error block, exits of the extended range, where the value does not exist.
       return value.parentBlock.instructions.first!
     }
   }
