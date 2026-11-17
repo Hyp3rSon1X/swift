@@ -307,6 +307,12 @@ TypeCheckPrimaryFileRequest::evaluate(Evaluator &eval, SourceFile *SF) const {
 
     // Type check the top-level elements of the source file.
     for (auto D : SF->getTopLevelDecls()) {
+      // A host that cancels the compilation (ASTContext::CancellationFlag)
+      // gets no further than the current declaration. Declarations that are
+      // left out are still type checked lazily if something requests them.
+      if (Ctx.CancellationFlag &&
+          Ctx.CancellationFlag->load(std::memory_order_relaxed))
+        break;
       if (auto *TLCD = dyn_cast<TopLevelCodeDecl>(D)) {
         TypeChecker::typeCheckTopLevelCodeDecl(TLCD);
       } else {

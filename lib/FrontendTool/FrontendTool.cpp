@@ -1307,6 +1307,10 @@ withSemanticAnalysis(CompilerInstance &Instance, FrontendObserver *observer,
   if (observer)
     observer->performedSemanticAnalysis(Instance);
 
+  // Type checking stops early when cancelled, so nothing after it may run.
+  if (Instance.isCancellationRequested())
+    return true;
+
   switch (opts.CrashMode) {
   case FrontendOptions::DebugCrashMode::AssertAfterParse:
     debugFailWithAssertion();
