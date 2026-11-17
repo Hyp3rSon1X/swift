@@ -353,6 +353,11 @@ TypeCheckPrimaryFileRequest::evaluate(Evaluator &eval, SourceFile *SF) const {
     }
     SF->typeCheckDelayedFunctions();
 
+    // Function bodies that were left out are not type checked either.
+    if (Ctx.CancellationFlag &&
+        Ctx.CancellationFlag->load(std::memory_order_relaxed))
+      return std::make_tuple<>();
+
     for (auto *opaqueDecl : SF->getOpaqueReturnTypeDecls()) {
       TypeChecker::checkCircularOpaqueReturnTypeDecl(opaqueDecl);
     }

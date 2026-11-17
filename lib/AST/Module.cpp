@@ -3632,8 +3632,14 @@ void SourceFile::addDelayedFunction(AbstractFunctionDecl *AFD) {
 }
 
 void SourceFile::typeCheckDelayedFunctions() {
+  auto &Ctx = getASTContext();
 
   for (unsigned i = 0; i < DelayedFunctions.size(); i++) {
+    // A host that cancels the compilation (ASTContext::CancellationFlag) gets
+    // no further than the current function body.
+    if (Ctx.CancellationFlag &&
+        Ctx.CancellationFlag->load(std::memory_order_relaxed))
+      break;
     auto *AFD = DelayedFunctions[i];
     assert(!AFD->getDeclContext()->isLocalContext());
     AFD->getTypecheckedBody();
