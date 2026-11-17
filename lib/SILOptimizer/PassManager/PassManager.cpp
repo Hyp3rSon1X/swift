@@ -39,6 +39,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GraphWriter.h"
 #include "llvm/Support/ManagedStatic.h"
+#include "llvm/Support/Process.h"
 #include <fstream>
 
 #ifndef SWIFT_ENABLE_SWIFT_IN_SWIFT
@@ -420,7 +421,7 @@ SILPassManager::SILPassManager(SILModule *M, bool isMandatory,
     std::fstream fs(SILPassCountConfigFile);
     if (!fs) {
       llvm::errs() << "cannot open pass count config file\n";
-      exit(1);
+      llvm::sys::Process::Exit(1);
     }
     std::string line;
     while (std::getline(fs, line)) {
@@ -460,7 +461,7 @@ void SILPassManager::parsePassesToRunCount(StringRef countsStr) {
   }
   if (!validFormat || !countsStr.empty()) {
     llvm::errs() << "error: wrong format of -sil-opt-pass-count option\n";
-    exit(1);
+    llvm::sys::Process::Exit(1);
   }
 }
 
@@ -471,7 +472,7 @@ void SILPassManager::parseBreakBeforePassCount(StringRef countsStr) {
   if (!validFormat || !countsStr.empty()) {
     llvm::errs()
         << "error: wrong format of -sil-break-before-pass-count option\n";
-    exit(1);
+    llvm::sys::Process::Exit(1);
   }
 }
 

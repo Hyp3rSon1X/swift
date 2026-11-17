@@ -46,6 +46,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/Process.h"
 #include <fstream>
 #include <optional>
 
@@ -2641,7 +2642,7 @@ bool swift::shouldRemoveCondFail(StringRef withMessage, StringRef functionName) 
   std::fstream fs(CondFailConfigFile);
   if (!fs) {
     llvm::errs() << "cannot cond_fail disablement config file\n";
-    exit(1);
+    llvm::sys::Process::Exit(1);
   }
   if (CondFailsToRemove.empty()) {
     std::string line;

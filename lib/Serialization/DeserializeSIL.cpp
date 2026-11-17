@@ -42,6 +42,7 @@
 #include "llvm/Support/DJB.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/OnDiskHashTable.h"
+#include "llvm/Support/Process.h"
 
 #include <type_traits>
 
@@ -637,7 +638,7 @@ SILFunction *SILDeserializer::getFuncForReference(StringRef name,
                      diag::deserialize_function_type_mismatch,
                      fnName, fnType.getASTType(), type.getASTType());
       diags.flushConsumers();
-      exit(1);
+      llvm::sys::Process::Exit(1);
     }
     return fn;
   }

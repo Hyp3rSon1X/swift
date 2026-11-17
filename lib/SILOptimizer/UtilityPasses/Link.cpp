@@ -18,6 +18,7 @@
 #include "swift/SIL/SILModule.h"
 #include "swift/Serialization/SerializedSILLoader.h"
 #include "swift/Serialization/SerializedModuleLoader.h"
+#include "llvm/Support/Process.h"
 
 using namespace swift;
 
@@ -183,7 +184,7 @@ linkEmbeddedRuntimeFunctionByName(#NAME, EFFECT, StringRef(#CC) == "C_CC");    \
                        fnName, getLinkageString(fnWithWrongLinkage->getLinkage()),
                        getLinkageString(*Linkage));
         diags.flushConsumers();
-        exit(1);
+        llvm::sys::Process::Exit(1);
       }
       return nullptr;
     }
