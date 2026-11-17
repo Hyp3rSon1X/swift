@@ -127,6 +127,7 @@ BridgedAvailabilityMacroMap BridgedASTContext::getAvailabilityMacroMap() const {
 }
 
 void *BridgedASTContext_staticBuildConfiguration(BridgedASTContext cContext) {
+#if SWIFT_BUILD_SWIFT_SYNTAX
   ASTContext &ctx = cContext.unbridged();
   void *staticBuildConfiguration = ctx.getGlobalCache().StaticBuildConfiguration;
   if (!staticBuildConfiguration) {
@@ -138,4 +139,9 @@ void *BridgedASTContext_staticBuildConfiguration(BridgedASTContext cContext) {
   }
 
   return staticBuildConfiguration;
+#else
+  // The implementation lives in the swift-syntax based BasicSwift library,
+  // and only swift-syntax based code (ASTGen) calls this.
+  llvm_unreachable("StaticBuildConfiguration requires swift-syntax");
+#endif
 }
