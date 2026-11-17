@@ -201,9 +201,17 @@ static bool extractLinkerFlags(const llvm::object::Binary *Bin,
 }
 
 int autolink_extract_main(ArrayRef<const char *> Args, const char *Argv0,
+                          void *MainAddr, llvm::raw_ostream &diagOS);
+
+int autolink_extract_main(ArrayRef<const char *> Args, const char *Argv0,
                           void *MainAddr) {
+  return autolink_extract_main(Args, Argv0, MainAddr, llvm::errs());
+}
+
+int autolink_extract_main(ArrayRef<const char *> Args, const char *Argv0,
+                          void *MainAddr, llvm::raw_ostream &diagOS) {
   CompilerInstance Instance;
-  PrintingDiagnosticConsumer PDC;
+  PrintingDiagnosticConsumer PDC(diagOS);
   Instance.addDiagnosticConsumer(&PDC);
 
   AutolinkExtractInvocation Invocation;

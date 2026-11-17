@@ -2495,6 +2495,13 @@ collectSupplementaryOutputPaths(ArrayRef<const char *> Args,
 int swift::performFrontend(ArrayRef<const char *> Args,
                            const char *Argv0, void *MainAddr,
                            FrontendObserver *observer) {
+  return performFrontend(Args, Argv0, MainAddr, observer, llvm::errs());
+}
+
+int swift::performFrontend(ArrayRef<const char *> Args,
+                           const char *Argv0, void *MainAddr,
+                           FrontendObserver *observer,
+                           llvm::raw_pwrite_stream &diagOS) {
   INITIALIZE_LLVM();
   llvm::EnablePrettyStackTraceOnSigInfoForThisThread();
 
@@ -2503,7 +2510,8 @@ int swift::performFrontend(ArrayRef<const char *> Args,
 
   CompilerInvocation Invocation;
 
-  DiagnosticHelper DH = DiagnosticHelper::create(*Instance, Invocation, Args);
+  DiagnosticHelper DH =
+      DiagnosticHelper::create(*Instance, Invocation, Args, diagOS);
 
   // Hopefully we won't trigger any LLVM-level fatal errors, but if we do try
   // to route them through our usual textual diagnostics before crashing.

@@ -21,6 +21,7 @@
 #include "swift/Basic/LLVM.h"
 
 namespace llvm {
+class raw_pwrite_stream;
 class Module;
 }
 
@@ -77,6 +78,15 @@ int performFrontend(ArrayRef<const char *> args,
                     const char *argv0,
                     void *mainAddr,
                     FrontendObserver *observer = nullptr);
+
+/// Like performFrontend above, but prints diagnostics to \p diagOS instead of
+/// llvm::errs(), so a host process that runs the frontend as a library can
+/// route each invocation's diagnostics separately.
+int performFrontend(ArrayRef<const char *> args,
+                    const char *argv0,
+                    void *mainAddr,
+                    FrontendObserver *observer,
+                    llvm::raw_pwrite_stream &diagOS);
 
 bool performCompileStepsPostSema(CompilerInstance &Instance, int &ReturnValue,
                                  FrontendObserver *observer,
