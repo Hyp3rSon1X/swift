@@ -320,6 +320,14 @@ TypeCheckPrimaryFileRequest::evaluate(Evaluator &eval, SourceFile *SF) const {
       }
     }
 
+    // A cancelled file may contain declarations that were never type checked
+    // and that have no error diagnosed, so nothing below may run on it; in
+    // particular, the playground, PC macro and debugger testing transforms
+    // expect fully type-checked code.
+    if (Ctx.CancellationFlag &&
+        Ctx.CancellationFlag->load(std::memory_order_relaxed))
+      return std::make_tuple<>();
+
     // Type-check macro-generated or implicitly-synthesized decls.
     if (auto *synthesizedSF = SF->getSynthesizedFile()) {
       for (auto *decl : synthesizedSF->getTopLevelDecls()) {
