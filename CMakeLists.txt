@@ -894,6 +894,10 @@ option(SWIFT_BUILD_SWIFT_SYNTAX
   "Enable building swift syntax"
   FALSE)
 
+option(SWIFT_COMPILER_SWIFT_SYNTAX_STATIC
+  "Build the swift-syntax libraries used by the compiler as static libraries"
+  FALSE)
+
 option(SWIFT_BUILD_REGEX_PARSER_IN_COMPILER
     "Build the Swift regex parser as part of the compiler."
     TRUE)
