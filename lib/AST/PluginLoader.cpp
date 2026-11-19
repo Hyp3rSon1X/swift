@@ -243,6 +243,11 @@ llvm::Expected<CompilerPlugin *> PluginLoader::getInProcessPlugins() {
         "library plugins require -in-process-plugin-server-path");
   }
 
+  // With a host-registered message handler the server path only selects the
+  // in-process route; it is never opened, so it need not exist.
+  if (InProcessPlugins::getHandleMessageOverride())
+    return getRegistry()->getInProcessPlugins(inProcPluginServerPath);
+
   auto fs = getPluginLoadingFS(Ctx);
   SmallString<128> resolvedPath;
   if (auto err = fs->getRealPath(inProcPluginServerPath, resolvedPath)) {

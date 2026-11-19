@@ -97,6 +97,7 @@ public:
 
 /// Represents a in-process plugin server.
 class InProcessPlugins : public CompilerPlugin {
+public:
   /// Entry point in the in-process plugin server. It receives the request
   /// string and populate the response string. The return value indicates there
   /// was an error. If true the returned string contains the error message.
@@ -105,6 +106,19 @@ class InProcessPlugins : public CompilerPlugin {
                                          size_t requestLength,
                                          char **responseDataPtr,
                                          size_t *responseDataLengthPtr);
+
+  /// Register a process-wide message handler that replaces the
+  /// 'swift_inproc_plugins_handle_message' entry point of the in-process
+  /// plugin server. Once set, 'create()' uses it instead of loading the
+  /// library at the server path. This is for hosts that link the compiler as
+  /// a library and serve plugin messages themselves; set it before the first
+  /// compilation.
+  static void setHandleMessageOverride(HandleMessageFunction fn);
+
+  /// The handler registered with 'setHandleMessageOverride()', if any.
+  static HandleMessageFunction getHandleMessageOverride();
+
+private:
   HandleMessageFunction handleMessageFn;
 
   /// Temporary storage for the response data from 'handleMessageFn'.

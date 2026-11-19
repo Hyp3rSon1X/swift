@@ -24,6 +24,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Config/config.h"
 
+#include <atomic>
 #include <signal.h>
 
 #if HAVE_UNISTD_H
@@ -44,8 +45,26 @@ CompilerPlugin::~CompilerPlugin() {
     this->cleanup();
 }
 
+static std::atomic<InProcessPlugins::HandleMessageFunction>
+    HandleMessageOverride{nullptr};
+
+void InProcessPlugins::setHandleMessageOverride(HandleMessageFunction fn) {
+  HandleMessageOverride.store(fn, std::memory_order_release);
+}
+
+InProcessPlugins::HandleMessageFunction
+InProcessPlugins::getHandleMessageOverride() {
+  return HandleMessageOverride.load(std::memory_order_acquire);
+}
+
 llvm::Expected<std::unique_ptr<InProcessPlugins>>
 InProcessPlugins::create(const char *serverPath) {
+  // A handler registered by the host replaces the server library, which is
+  // then never opened.
+  if (auto handler = getHandleMessageOverride())
+    return std::unique_ptr<InProcessPlugins>(
+        new InProcessPlugins(serverPath, handler));
+
   std::string err;
   auto server = loadLibrary(serverPath, &err);
   if (!server) {
