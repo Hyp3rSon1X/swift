@@ -898,6 +898,10 @@ option(SWIFT_COMPILER_SWIFT_SYNTAX_STATIC
   "Build the swift-syntax libraries used by the compiler as static libraries"
   FALSE)
 
+option(SWIFT_DISABLE_EXECUTABLE_PLUGINS
+  "Reject executable macro plugins instead of launching them (for compilers embedded in processes that cannot spawn)"
+  FALSE)
+
 option(SWIFT_BUILD_REGEX_PARSER_IN_COMPILER
     "Build the Swift regex parser as part of the compiler."
     TRUE)

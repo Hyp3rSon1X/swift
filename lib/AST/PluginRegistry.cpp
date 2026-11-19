@@ -146,8 +146,21 @@ PluginRegistry::getInProcessPlugins(llvm::StringRef serverPath) {
   return inProcessPlugins.get();
 }
 
+#if defined(SWIFT_DISABLE_EXECUTABLE_PLUGINS)
+static llvm::Error executablePluginsUnsupported() {
+  return llvm::createStringError(
+      std::errc::operation_not_supported,
+      "executable plugins are not supported in this build");
+}
+#endif
+
 llvm::Expected<CompilerPlugin *>
 PluginRegistry::loadExecutablePlugin(StringRef path, bool disableSandbox) {
+#if defined(SWIFT_DISABLE_EXECUTABLE_PLUGINS)
+  // Every executable plugin ('-load-plugin-executable', the server of
+  // '-external-plugin-path' and of '-load-resolved-plugin') is loaded here.
+  return executablePluginsUnsupported();
+#else
   llvm::sys::fs::file_status stat;
   if (auto err = llvm::sys::fs::status(path, stat)) {
     return llvm::errorCodeToError(err);
@@ -189,6 +202,7 @@ PluginRegistry::loadExecutablePlugin(StringRef path, bool disableSandbox) {
 
   storage = std::move(plugin);
   return storage.get();
+#endif
 }
 
 LoadedExecutablePlugin::~LoadedExecutablePlugin() {
@@ -202,6 +216,9 @@ LoadedExecutablePlugin::~LoadedExecutablePlugin() {
 }
 
 llvm::Error LoadedExecutablePlugin::spawnIfNeeded() {
+#if defined(SWIFT_DISABLE_EXECUTABLE_PLUGINS)
+  return executablePluginsUnsupported();
+#else
   if (Process) {
     // NOTE: We don't check the mtime here because 'stat(2)' call is too heavy.
     // PluginRegistry::loadExecutablePlugin() checks it and replace this object
@@ -233,6 +250,7 @@ llvm::Error LoadedExecutablePlugin::spawnIfNeeded() {
   }
 
   return llvm::Error::success();
+#endif
 }
 
 LoadedExecutablePlugin::PluginProcess::~PluginProcess() {

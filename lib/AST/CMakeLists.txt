@@ -183,4 +183,8 @@ if (SWIFT_BUILD_SWIFT_SYNTAX)
     PRIVATE swiftASTGen swiftBasicSwift)
 endif()
 
+if(SWIFT_DISABLE_EXECUTABLE_PLUGINS)
+  target_compile_definitions(swiftAST PRIVATE SWIFT_DISABLE_EXECUTABLE_PLUGINS)
+endif()
+
 set_swift_llvm_is_available(swiftAST)
