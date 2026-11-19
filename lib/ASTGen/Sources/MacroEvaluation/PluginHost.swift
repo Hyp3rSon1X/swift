@@ -344,8 +344,10 @@ class PluginDiagnosticsEngine {
     guard let bufferBaseAddress = exportedSourceFile.pointee.buffer.baseAddress else {
       return nil
     }
-    // Ensure 'offset' is within the buffer.
-    guard offset <= exportedSourceFile.pointee.buffer.count else {
+    // Ensure 'offset' is within the buffer. Plugins are not trusted to send
+    // valid positions; a location outside every buffer is undefined behavior
+    // in the source manager.
+    guard offset >= 0 && offset <= exportedSourceFile.pointee.buffer.count else {
       return nil
     }
     return SourceLoc(raw: bufferBaseAddress.advanced(by: offset))
@@ -362,6 +364,10 @@ class PluginDiagnosticsEngine {
   private func bridgedSourceRange(
     for range: PluginMessage.Diagnostic.PositionRange
   ) -> (start: SourceLoc, end: SourceLoc)? {
+    // A character range must not end before it starts.
+    guard range.startOffset <= range.endOffset else {
+      return nil
+    }
     let start = bridgedSourceLoc(at: range.startOffset, in: range.fileName)
     let end = bridgedSourceLoc(at: range.endOffset, in: range.fileName)
 
