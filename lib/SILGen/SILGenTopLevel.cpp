@@ -393,6 +393,9 @@ SILGenTopLevel::SILGenTopLevel(SILGenFunction &SGF) : SGF(SGF) {}
 void SILGenTopLevel::visitSourceFile(SourceFile *SF) {
 
   for (auto *D : SF->getTopLevelDecls()) {
+    // A cancelled compilation gets no further than the current declaration.
+    if (SGF.getASTContext().isCancellationRequested())
+      return;
     D->visitAuxiliaryDecls([&](Decl *AuxiliaryDecl) { visit(AuxiliaryDecl); });
     visit(D);
   }
@@ -439,6 +442,18 @@ void SILGenTopLevel::visitTopLevelCodeDecl(TopLevelCodeDecl *TD) {
   DebugScope DS(SGF, CleanupLocation(TD));
 
   for (auto &ESD : TD->getBody()->getElements()) {
+    // A cancelled compilation gets no further than the current element. As
+    // in a brace statement, end the block and continue in a new, unreachable
+    // one, so that the code emitted after the top-level code (cleanups, the
+    // epilog of the entry point) has an insertion point.
+    if (SGF.getASTContext().isCancellationRequested()) {
+      if (SGF.B.hasValidInsertionPoint()) {
+        SGF.B.createUnreachable(ArtificialUnreachableLocation());
+        SGF.B.emitBlock(SGF.createBasicBlock());
+      }
+      return;
+    }
+
     if (!SGF.B.hasValidInsertionPoint()) {
       if (auto *S = ESD.dyn_cast<Stmt *>()) {
         if (S->isImplicit())

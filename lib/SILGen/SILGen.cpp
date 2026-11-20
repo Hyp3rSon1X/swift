@@ -97,9 +97,13 @@ SILGenModule::~SILGenModule() {
       f.setLinkage(SILLinkage::PublicExternal);
   }
 
-  // Skip verification if a lazy typechecking error occurred.
+  // Skip verification if a lazy typechecking error occurred, or if the
+  // compilation was cancelled: the functions that were not finished are left
+  // without a body.
   auto &ctx = getASTContext();
   if (ctx.TypeCheckerOpts.EnableLazyTypecheck && ctx.hadError())
+    return;
+  if (ctx.isCancellationRequested())
     return;
 
   M.verifyIncompleteOSSA();
@@ -2222,6 +2226,10 @@ void SILGenModule::emitSourceFile(SourceFile *sf) {
   }
 
   for (auto *D : sf->getTopLevelDecls()) {
+    // A cancelled compilation gets no further than the current declaration.
+    if (getASTContext().isCancellationRequested())
+      return;
+
     // Emit auxiliary decls.
     D->visitAuxiliaryDecls([&](Decl *auxiliaryDecl) {
       visit(auxiliaryDecl);
@@ -2355,6 +2363,9 @@ ASTLoweringRequest::evaluate(Evaluator &evaluator,
   // care to keep pumping the queues.
   while (!SGM.pendingForcedFunctions.empty()
          || !SGM.pendingConformances.empty()) {
+    // A cancelled compilation leaves the rest of the queues alone.
+    if (silMod->getASTContext().isCancellationRequested())
+      break;
     while (!SGM.pendingForcedFunctions.empty()) {
       auto &front = SGM.pendingForcedFunctions.front();
       SGM.emitFunctionDefinition(

@@ -321,7 +321,21 @@ void StmtEmitter::visitBraceStmt(BraceStmt *S) {
 
   bool didDiagnoseUnreachableElements = false;
   for (auto &ESD : S->getElements()) {
-    
+    // A cancelled compilation (see ASTContext::CancellationFlag) gets no
+    // further than the current element: end the block with an `unreachable`
+    // and leave the rest out. The brace may be part of an expression (a
+    // string interpolation, a macro expansion) whose emission goes on after
+    // it, so continue in a new block that nothing branches to, as
+    // SingleValueStmtExpr emission does after a statement that does not fall
+    // through.
+    if (SGF.getASTContext().isCancellationRequested()) {
+      if (SGF.B.hasValidInsertionPoint()) {
+        SGF.B.createUnreachable(ArtificialUnreachableLocation());
+        SGF.B.emitBlock(SGF.createBasicBlock());
+      }
+      break;
+    }
+
     if (auto D = ESD.dyn_cast<Decl*>()) {
       // Hoisted declarations are emitted at the top level by emitSourceFile().
       if (D->isHoisted())
