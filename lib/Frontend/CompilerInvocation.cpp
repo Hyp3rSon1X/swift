@@ -1675,6 +1675,20 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
     (Target.isTvOS() && Target.isOSVersionLT(12, 2)) ||
     (Target.isWatchOS() && Target.isOSVersionLT(5, 2));
 
+  if (const Arg *A = Args.getLastArg(OPT_platform_condition_os)) {
+    StringRef OS = A->getValue();
+    PlatformConditionKind SuggestedKind = PlatformConditionKind::OS;
+    std::vector<StringRef> SuggestedValues;
+    if (LangOptions::checkPlatformConditionSupported(
+            PlatformConditionKind::OS, OS, SuggestedKind, SuggestedValues)) {
+      Opts.PlatformConditionOSOverride = OS.str();
+    } else {
+      Diags.diagnose(SourceLoc(), diag::error_unsupported_platform_condition_os,
+                     OS);
+      HadError = true;
+    }
+  }
+
   // Must be processed after any other language options that could affect
   // platform conditions.
   bool UnsupportedOS, UnsupportedArch;

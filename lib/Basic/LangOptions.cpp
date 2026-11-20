@@ -593,6 +593,25 @@ std::pair<bool, bool> LangOptions::setTarget(llvm::Triple triple) {
     break;
   }
 
+  // Replace the "os" platform condition if requested. Only the values a
+  // matching triple would produce change; UnsupportedOS still reflects the
+  // real target, since it affects more than conditional compilation.
+  if (PlatformConditionOSOverride) {
+    llvm::erase_if(PlatformConditionValues, [](const auto &entry) {
+      return entry.first == PlatformConditionKind::OS;
+    });
+
+    StringRef OS = *PlatformConditionOSOverride;
+    if (OS == "OSX" || OS == "macOS")
+      addAppleOSPlatformConditionValues({"OSX", "macOS"});
+    else if (OS == "xrOS" || OS == "visionOS")
+      addAppleOSPlatformConditionValues({"xrOS", "visionOS"});
+    else if (OS == "iOS" || OS == "tvOS" || OS == "watchOS")
+      addAppleOSPlatformConditionValues({OS});
+    else
+      addPlatformConditionValue(PlatformConditionKind::OS, OS);
+  }
+
   bool UnsupportedArch = false;
 
   // Set the "arch" platform condition.

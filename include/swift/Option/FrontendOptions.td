@@ -1362,6 +1362,11 @@ def target_sdk_version : Separate<["-"], "target-sdk-version">,
 def target_variant_sdk_version : Separate<["-"], "target-variant-sdk-version">,
   HelpText<"The version of target variant SDK used for compilation">;
 
+def platform_condition_os : Separate<["-"], "platform-condition-os">,
+  MetaVarName<"<os>">,
+  HelpText<"Use <os> for the 'os()' conditional compilation condition instead "
+           "of the operating system of the target">;
+
 def target_sdk_name : Separate<["-"], "target-sdk-name">,
   HelpText<"Canonical name of the target SDK used for compilation">;
 

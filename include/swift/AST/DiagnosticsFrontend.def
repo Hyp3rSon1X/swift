@@ -39,6 +39,10 @@ ERROR(error_unsupported_target_os, none,
 ERROR(error_unsupported_target_arch, none,
       "unsupported target architecture: '%0'", (StringRef))
 
+ERROR(error_unsupported_platform_condition_os, none,
+      "unsupported operating system '%0' in '-platform-condition-os'",
+      (StringRef))
+
 WARNING(warning_upcoming_feature_on_by_default, none,
         "upcoming feature '%0' already enabled as of the Swift %1 "
         "language mode",

@@ -160,6 +160,14 @@ namespace swift {
     std::optional<llvm::Triple> ClangTarget;
     std::optional<llvm::Triple> ClangTargetVariant;
 
+    /// If set, the value used for the 'os()' platform condition instead of
+    /// the one derived from \c Target.
+    ///
+    /// Only 'os()' is affected; every other platform condition, and code
+    /// generation, still follow \c Target. This is applied by \c setTarget,
+    /// so it survives later changes of the target triple.
+    std::optional<std::string> PlatformConditionOSOverride;
+
     /// The SDK version, if known.
     std::optional<llvm::VersionTuple> SDKVersion;
 
