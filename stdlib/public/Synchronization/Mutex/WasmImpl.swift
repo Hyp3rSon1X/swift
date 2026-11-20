@@ -77,46 +77,32 @@ public struct _MutexHandle: ~Copyable {
     // really want to perform the strong variant before attempting to do weak
     // ones in the loop.
 
-    var (exchanged, state) = storage.compareExchange(
+    let exchanged = storage.compareExchange(
       expected: .unlocked,
       desired: .locked,
       successOrdering: .acquiring,
       failureOrdering: .relaxed
-    )
+    ).exchanged
 
     if _fastPath(exchanged) {
       // Locked!
       return
     }
 
-    while !exchanged {
-      // If we're not already contended, go ahead and transition the mutex state
-      // into being contended. If when we do this that the value stored there
-      // was unlocked, then we know we unintentionally acquired the lock. A
-      // weird quirk that occurs if this happens is that we go directly from
-      // .unlocked -> .contended when in fact the lock may not be contended.
-      // We may be able to do another atomic access and change it to .locked if
-      // acquired it, but it may cause more problems than just potentially
-      // calling wake with no waiters.
-      if state != .contended, storage.exchange(
-        .contended,
-        ordering: .acquiring
-      ) == .unlocked {
-        // Locked!
-        return
-      }
-
+    // Transition the mutex into being contended. If the value stored there was
+    // unlocked, then we acquired the lock. A quirk of this is that we go
+    // directly from .unlocked -> .contended when the lock may not actually be
+    // contended, which at worst costs a wake with no waiters on unlock.
+    //
+    // The lock must also be taken as .contended, never .locked, after waiting:
+    // other threads may still be blocked on the mutex, and only an unlock that
+    // sees .contended wakes one of them. Taking it as .locked would leave them
+    // blocked forever once no new thread contends for the lock.
+    while storage.exchange(.contended, ordering: .acquiring) != .unlocked {
       // Block until unlock has been called. This will return early if the call
       // to unlock happened between attempting to acquire and attempting to
       // wait while nobody else managed to acquire it yet.
       storage._wait(expected: .contended)
-
-      (exchanged, state) = storage.weakCompareExchange(
-        expected: .unlocked,
-        desired: .locked,
-        successOrdering: .acquiring,
-        failureOrdering: .relaxed
-      )
     }
 
     // Locked!
