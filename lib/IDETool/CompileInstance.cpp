@@ -369,6 +369,14 @@ bool CompileInstance::performCompile(
   if (CancellationFlag && CancellationFlag->load(std::memory_order_relaxed))
     return true;
 
+  // A cancelled compilation may have stopped type checking part way, leaving
+  // function bodies unchecked or replaced with errors. Don't reuse the
+  // instance for the next compilation.
+  SWIFT_DEFER {
+    if (CancellationFlag && CancellationFlag->load(std::memory_order_relaxed))
+      CI.reset();
+  };
+
   if (performSema(Args, fileSystem, DiagC, CancellationFlag))
     return true;
 

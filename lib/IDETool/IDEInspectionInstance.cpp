@@ -469,6 +469,14 @@ bool IDEInspectionInstance::performCachedOperationIfPossible(
       CachedCI->removeDiagnosticConsumer(DiagC);
   }
 
+  // An operation that was cancelled may have stopped type checking part way,
+  // leaving declarations it requested unchecked or replaced with errors.
+  // Don't reuse the instance for later operations.
+  if (CancellationFlag && CancellationFlag->load(std::memory_order_relaxed)) {
+    CachedCI = nullptr;
+    return true;
+  }
+
   CachedReuseCount += 1;
 
   return true;
