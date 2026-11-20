@@ -4461,6 +4461,10 @@ BlockPartitionState::BlockPartitionState(
     : entryPartition(isolationHistoryFactory.get()),
       exitPartition(isolationHistoryFactory.get()), basicBlock(basicBlock),
       ptrSetFactory(ptrSetFactory), sendingOpToStateMap(sendingOpToStateMap) {
+  // In a cancelled compilation the results are never used (see
+  // RegionAnalysisFunctionInfo::runDataflow()).
+  if (basicBlock->getModule().getASTContext().isCancellationRequested())
+    return;
   translator.translateSILBasicBlock(basicBlock, blockPartitionOps);
 }
 
@@ -4647,6 +4651,14 @@ void RegionAnalysisFunctionInfo::runDataflow() {
     anyNeedUpdate = false;
 
     for (auto *block : pofi->getReversePostOrder()) {
+      // A cancelled compilation (see ASTContext::CancellationFlag) gives up on
+      // the dataflow, which can take long on large functions; the function is
+      // then reported as unsupported.
+      if (fn->getASTContext().isCancellationRequested()) {
+        cancelled = true;
+        return;
+      }
+
       auto &blockState = (*blockStates)[block];
       blockState.isLive = true;
 

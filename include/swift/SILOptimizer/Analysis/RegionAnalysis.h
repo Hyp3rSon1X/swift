@@ -536,6 +536,12 @@ class RegionAnalysisFunctionInfo {
   /// ownership.
   bool supportedFunction;
 
+  /// Set to true if the compilation was cancelled (see
+  /// ASTContext::CancellationFlag) before the dataflow converged. The
+  /// function is then reported as unsupported, so that no client uses the
+  /// incomplete results.
+  bool cancelled = false;
+
 public:
   using LazyType = LazyFunctionInfo<RegionAnalysis, RegionAnalysisFunctionInfo>;
 
@@ -553,7 +559,7 @@ public:
 
   SILFunction *getFunction() const { return fn; }
 
-  bool isSupportedFunction() const { return supportedFunction; }
+  bool isSupportedFunction() const { return supportedFunction && !cancelled; }
 
   NullablePtr<BlockPartitionState> getBlockState(SILBasicBlock *block) const {
     return blockStates->get(block);
