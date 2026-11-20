@@ -26,18 +26,35 @@
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/TargetSelect.h"
 
+#include <mutex>
+
 #define PROGRAM_START(argc, argv)                                              \
   llvm::InitLLVM _INITIALIZE_LLVM(argc, argv);                                 \
   llvm::setBugReportMsg(SWIFT_CRASH_BUG_REPORT_MESSAGE "\n")
 
-#define INITIALIZE_LLVM() \
-  do { \
-    llvm::InitializeAllTargets(); \
-    llvm::InitializeAllTargetMCs(); \
-    llvm::InitializeAllAsmPrinters(); \
-    llvm::InitializeAllAsmParsers(); \
-    llvm::InitializeAllDisassemblers(); \
-    llvm::InitializeAllTargetInfos(); \
-  } while (0)
+namespace swift {
+
+/// Registers all of LLVM's targets, once per process. Several clients of the
+/// compiler in one process (the frontend run in-process, an in-process
+/// sourcekitd, the dependency scanner) each initialize LLVM at their start,
+/// possibly at the same time on different threads, and LLVM's target registry
+/// is not thread-safe: two threads registering the same target can link it
+/// into the registry twice. The function is inline, so all of its callers in
+/// a binary share one flag.
+inline void initializeLLVMOnce() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    llvm::InitializeAllTargets();
+    llvm::InitializeAllTargetMCs();
+    llvm::InitializeAllAsmPrinters();
+    llvm::InitializeAllAsmParsers();
+    llvm::InitializeAllDisassemblers();
+    llvm::InitializeAllTargetInfos();
+  });
+}
+
+} // end namespace swift
+
+#define INITIALIZE_LLVM() ::swift::initializeLLVMOnce()
 
 #endif // SWIFT_BASIC_LLVMINITIALIZE_H
