@@ -15,6 +15,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/thread.h"
+#include <atomic>
 #include <optional>
 
 #include <dispatch/dispatch.h>
@@ -87,20 +88,45 @@ void *WorkQueue::Impl::create(Dequeuing DeqKind, Priority Prio,
   return queue;
 }
 
+static std::atomic<WorkQueue::ExecutionHook> TheExecutionHook{nullptr};
+
+void WorkQueue::setExecutionHook(ExecutionHook Hook) {
+  TheExecutionHook.store(Hook, std::memory_order_release);
+}
+
 namespace {
 struct ExecuteOnLargeStackInfo {
   dispatch_block_t BlockToRun;
+  WorkQueue::ExecutionHook Hook = nullptr;
   
   ~ExecuteOnLargeStackInfo() {
     Block_release(BlockToRun);
   }
 };
+
+/// A work item that runs through the execution hook.
+struct HookedWorkItem {
+  void *Context;
+  WorkQueue::DispatchFn Fn;
+  WorkQueue::ExecutionHook Hook;
+};
 } // end anonymous namespace
 
 static void executeBlock(void *Data) {
   auto ExecuteInfo = (ExecuteOnLargeStackInfo*)Data;
-  ExecuteInfo->BlockToRun();
+  if (ExecuteInfo->Hook)
+    ExecuteInfo->Hook(ExecuteInfo, [](void *Info) {
+      static_cast<ExecuteOnLargeStackInfo *>(Info)->BlockToRun();
+    });
+  else
+    ExecuteInfo->BlockToRun();
   delete ExecuteInfo;
+}
+
+static void executeHooked(void *Data) {
+  HookedWorkItem Item = *static_cast<HookedWorkItem *>(Data);
+  delete static_cast<HookedWorkItem *>(Data);
+  Item.Hook(Item.Context, Item.Fn);
 }
 
 static void executeOnLargeStackThread(void *Data) {
@@ -110,12 +136,22 @@ static void executeOnLargeStackThread(void *Data) {
   Thread.join();
 }
 
+/// \p isSync: the caller waits for the item. Unless it is stack-deep, such an
+/// item runs on the calling thread as part of the caller's work, so it does not
+/// go through the execution hook.
 static std::pair<void *, WorkQueue::DispatchFn>
-toCFunction(void *Ctx, WorkQueue::DispatchFn Fn, bool isStackDeep) {
-  if (!isStackDeep)
-    return std::make_pair(Ctx, Fn);
+toCFunction(void *Ctx, WorkQueue::DispatchFn Fn, bool isStackDeep,
+            bool isSync) {
+  WorkQueue::ExecutionHook Hook =
+      TheExecutionHook.load(std::memory_order_acquire);
+  if (!isStackDeep) {
+    if (!Hook || isSync)
+      return std::make_pair(Ctx, Fn);
+    return std::make_pair(new HookedWorkItem{Ctx, Fn, Hook}, executeHooked);
+  }
 
   auto ExecuteInfo = new ExecuteOnLargeStackInfo;
+  ExecuteInfo->Hook = Hook;
 #if HAVE_DISPATCH_BLOCK_CREATE
   // Transfer attributes of the calling thread, such as QOS class,
   // os_activity_t, etc.
@@ -136,7 +172,7 @@ void WorkQueue::Impl::dispatch(Ty Obj, const DispatchData &Fn) {
   void *Context;
   WorkQueue::DispatchFn CFn;
   std::tie(Context, CFn) = toCFunction(Fn.getContext(), Fn.getFunction(),
-                                       Fn.isStackDeep());
+                                       Fn.isStackDeep(), /*isSync=*/false);
   dispatch_queue_t queue = dispatch_queue_t(Obj);
   dispatch_async_f(queue, Context, CFn);
 }
@@ -145,7 +181,7 @@ void WorkQueue::Impl::dispatchSync(Ty Obj, const DispatchData &Fn) {
   void *Context;
   WorkQueue::DispatchFn CFn;
   std::tie(Context, CFn) = toCFunction(Fn.getContext(), Fn.getFunction(),
-                                       Fn.isStackDeep());
+                                       Fn.isStackDeep(), /*isSync=*/true);
   dispatch_queue_t queue = dispatch_queue_t(Obj);
   dispatch_sync_f(queue, Context, CFn);
 }
@@ -154,7 +190,7 @@ void WorkQueue::Impl::dispatchBarrier(Ty Obj, const DispatchData &Fn) {
   void *Context;
   WorkQueue::DispatchFn CFn;
   std::tie(Context, CFn) = toCFunction(Fn.getContext(), Fn.getFunction(),
-                                       Fn.isStackDeep());
+                                       Fn.isStackDeep(), /*isSync=*/false);
   dispatch_queue_t queue = dispatch_queue_t(Obj);
   dispatch_barrier_async_f(queue, Context, CFn);
 }
@@ -163,7 +199,7 @@ void WorkQueue::Impl::dispatchBarrierSync(Ty Obj, const DispatchData &Fn) {
   void *Context;
   WorkQueue::DispatchFn CFn;
   std::tie(Context, CFn) = toCFunction(Fn.getContext(), Fn.getFunction(),
-                                       Fn.isStackDeep());
+                                       Fn.isStackDeep(), /*isSync=*/true);
   dispatch_queue_t queue = dispatch_queue_t(Obj);
   dispatch_barrier_sync_f(queue, Context, CFn);
 }
@@ -172,7 +208,7 @@ void WorkQueue::Impl::dispatchOnMain(const DispatchData &Fn) {
   void *Context;
   WorkQueue::DispatchFn CFn;
   std::tie(Context, CFn) = toCFunction(Fn.getContext(), Fn.getFunction(),
-                                       Fn.isStackDeep());
+                                       Fn.isStackDeep(), /*isSync=*/false);
   dispatch_async_f(dispatch_get_main_queue(), Context, CFn);
 }
 
@@ -180,7 +216,7 @@ void WorkQueue::Impl::dispatchConcurrent(Priority Prio, const DispatchData &Fn) 
   void *Context;
   WorkQueue::DispatchFn CFn;
   std::tie(Context, CFn) = toCFunction(Fn.getContext(), Fn.getFunction(),
-                                       Fn.isStackDeep());
+                                       Fn.isStackDeep(), /*isSync=*/false);
   dispatch_async_f(getDispatchGlobalQueue(Prio), Context, CFn);
 }
 

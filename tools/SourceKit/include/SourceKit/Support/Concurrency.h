@@ -83,6 +83,22 @@ public:
 
   typedef void (*DispatchFn)(void *Context);
 
+  /// Runs one work item by calling \c Fn(Context), at most once, on the
+  /// calling thread.
+  typedef void (*ExecutionHook)(void *Context, DispatchFn Fn);
+
+  /// Installs a function through which work items run (nullptr: none): every
+  /// item that is dispatched asynchronously (dispatch, dispatchBarrier,
+  /// dispatchConcurrent and dispatchOnMain), and every stack-deep item, which
+  /// runs on a thread of its own. Synchronous items that run on the calling
+  /// thread are part of the caller's work and do not go through it.
+  ///
+  /// A process that embeds SourceKit can use it to run SourceKit's work under
+  /// its own crash recovery, or to stop running it: a hook that does not call
+  /// \c Fn drops the item (for a synchronous item, the caller continues as if
+  /// it had run). Install it before any work is dispatched.
+  static void setExecutionHook(ExecutionHook Hook);
+
   WorkQueue() : ImplObj(0) { }
   WorkQueue(Dequeuing DeqKind, llvm::StringRef Label,
             Priority Prio = Priority::Default) {
