@@ -2263,13 +2263,14 @@ static bool performCompileStepsPostSILGen(
 
   runSILLoweringPasses(*SM);
 
+  // Cancellation check after SILLowering, before anything is written: a
+  // cancelled lowering pipeline may have stopped part way.
+  if (Instance.isCancellationRequested())
+    return true;
+
   // If we are asked to emit lowered SIL, dump it now and return.
   if (Action == FrontendOptions::ActionType::EmitLoweredSIL)
     return writeSIL(*SM, PSPs, Instance, Invocation.getSILOptions());
-
-  // Cancellation check after SILLowering.
-  if (Instance.isCancellationRequested())
-    return true;
 
   // TODO: at this point we need to flush any the _tracing and profiling_
   // in the UnifiedStatsReporter, because the those subsystems of the USR

@@ -58,6 +58,12 @@ bool swift::runSILDiagnosticPasses(SILModule &Module) {
                           SILPassPipelinePlan::getSILGenPassPipeline(opts),
                           /*isMandatory*/ true);
 
+  // A cancelled compilation stops the pipelines part way; nothing may look at
+  // the module after that.
+  auto &Ctx = Module.getASTContext();
+  if (Ctx.isCancellationRequested())
+    return true;
+
   if (opts.VerifyAll)
     Module.verifyOwnership();
 
@@ -65,8 +71,10 @@ bool swift::runSILDiagnosticPasses(SILModule &Module) {
                           SILPassPipelinePlan::getDiagnosticPassPipeline(opts),
                           /*isMandatory*/ true);
 
+  if (Ctx.isCancellationRequested())
+    return true;
+
   // If we were asked to debug serialization, exit now.
-  auto &Ctx = Module.getASTContext();
   if (opts.DebugSerialization)
     return Ctx.hadError();
 
@@ -123,6 +131,10 @@ void swift::runSILOptimizationPasses(SILModule &Module) {
   executePassPipelinePlan(
       &Module, SILPassPipelinePlan::getPerformancePassPipeline(opts));
 
+  // A cancelled compilation is neither serialized nor verified.
+  if (Module.getASTContext().isCancellationRequested())
+    return;
+
   // Check if we actually serialized our module. If we did not, serialize now.
   if (!Module.isSerialized()) {
     executePassPipelinePlan(
@@ -152,6 +164,10 @@ void swift::runSILPassesForOnone(SILModule &Module) {
   executePassPipelinePlan(
       &Module, SILPassPipelinePlan::getOnonePassPipeline(Module.getOptions()),
       /*isMandatory*/ true);
+
+  // A cancelled compilation is not verified.
+  if (Module.getASTContext().isCancellationRequested())
+    return;
 
   // Verify the module, if required.
   if (Module.getOptions().VerifyAll)
@@ -219,6 +235,10 @@ void swift::runSILLoweringPasses(SILModule &Module) {
   executePassPipelinePlan(&Module,
                           SILPassPipelinePlan::getLoweringPassPipeline(opts),
                           /*isMandatory*/ true);
+
+  // A cancelled compilation may not have finished lowering.
+  if (Module.getASTContext().isCancellationRequested())
+    return;
 
   Module.setStage(SILStage::Lowered);
 }

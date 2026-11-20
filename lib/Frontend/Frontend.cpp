@@ -1915,6 +1915,12 @@ bool CompilerInstance::performSILProcessing(SILModule *silModule) {
       !Invocation.getFrontendOptions().AllowModuleWithCompilerErrors)
     return true;
 
+  // A cancelled compilation stops the pass pipelines part way (see
+  // SILPassManager::continueTransforming()): don't verify or optimize the
+  // module that is left.
+  if (isCancellationRequested())
+    return true;
+
   {
     FrontendStatsTracer tracer(silModule->getASTContext().Stats,
                                "SIL verification, pre-optimization");
@@ -1922,6 +1928,9 @@ bool CompilerInstance::performSILProcessing(SILModule *silModule) {
   }
 
   performSILOptimizations(Invocation, silModule);
+
+  if (isCancellationRequested())
+    return true;
 
   if (auto *stats = getStatsReporter())
     countStatsPostSILOpt(*stats, *silModule);

@@ -477,6 +477,11 @@ void SILPassManager::parseBreakBeforePassCount(StringRef countsStr) {
 }
 
 bool SILPassManager::continueTransforming() {
+  // A cancelled compilation (see ASTContext::CancellationFlag) runs no further
+  // passes, not even mandatory ones. Callers that go on with the module must
+  // check for the cancellation first.
+  if (Mod->getASTContext().isCancellationRequested())
+    return false;
   if (isMandatory)
     return true;
   return NumPassesRun < maxNumPassesToRun;
@@ -497,6 +502,11 @@ bool SILPassManager::continueWithNextSubpassRun(
   }
 
   unsigned subPass = numSubpassesRun++;
+
+  // Passes that support sub-pass bisection leave valid SIL behind at each
+  // sub-pass, so a cancelled compilation stops them there too.
+  if (Mod->getASTContext().isCancellationRequested())
+    return false;
 
   if (SILPrintEverySubpass && isFunctionSelectedForPrinting(function) &&
       doPrintBefore(trans, function)) {
