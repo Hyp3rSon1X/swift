@@ -158,8 +158,9 @@ public:
 };
 
 /// Initialize the sourcekitd client library. Returns true if this is the first
-/// time it is initialized.
-bool initializeClient();
+/// time it is initialized. The first call installs LLVM's fatal error handler
+/// for the process unless \p InstallFatalErrorHandler is false.
+bool initializeClient(bool InstallFatalErrorHandler = true);
 /// Shutdown the sourcekitd client. Returns true if this is the last active
 /// client and the service should be shutdown.
 bool shutdownClient();

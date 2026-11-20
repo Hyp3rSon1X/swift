@@ -252,15 +252,16 @@ void sourcekitd::enableLogging(StringRef LoggerName) {
 static llvm::sys::Mutex GlobalInitMtx;
 static unsigned gInitRefCount = 0;
 
-bool sourcekitd::initializeClient() {
+bool sourcekitd::initializeClient(bool InstallFatalErrorHandler) {
   llvm::sys::ScopedLock L(GlobalInitMtx);
   ++gInitRefCount;
   if (gInitRefCount > 1)
     return false;
 
   static std::once_flag flag;
-  std::call_once(flag, []() {
-    llvm::install_fatal_error_handler(fatal_error_handler, 0);
+  std::call_once(flag, [InstallFatalErrorHandler]() {
+    if (InstallFatalErrorHandler)
+      llvm::install_fatal_error_handler(fatal_error_handler, 0);
     sourcekitd::enableLogging("sourcekit");
   });
 

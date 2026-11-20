@@ -48,6 +48,12 @@ struct ServiceHooks {
   /// initialized.
   void (*ServiceInitialized)() = nullptr;
 
+  /// Called by the first sourcekitd_initialize. If it returns false, the
+  /// service leaves LLVM's fatal error handler alone (it installs one that
+  /// prints the reason to stderr and aborts), so that a host that installed
+  /// its own keeps it.
+  bool (*ShouldInstallFatalErrorHandler)() = nullptr;
+
   /// Called on the main queue with each notification for the handler of
   /// sourcekitd_set_notification_handler, instead of calling the handler:
   /// \c Deliver calls the handler with the notification. The hook calls

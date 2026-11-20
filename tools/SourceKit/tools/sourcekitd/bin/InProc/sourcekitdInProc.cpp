@@ -120,7 +120,9 @@ void sourcekitd_initialize(void) {
   assert(msgHandlingQueue == nullptr && "Cannot initialize service twice");
   msgHandlingQueue = new WorkQueue(WorkQueue::Dequeuing::Concurrent,
                                    "sourcekitdInProc.msgHandlingQueue");
-  if (sourcekitd::initializeClient()) {
+  bool InstallFatalErrorHandler = !Hooks.ShouldInstallFatalErrorHandler ||
+                                  Hooks.ShouldInstallFatalErrorHandler();
+  if (sourcekitd::initializeClient(InstallFatalErrorHandler)) {
     LOG_INFO_FUNC(High, "initializing");
     sourcekitd::initializeService(sourcekitdInProc::getSwiftExecutablePath(),
                                   sourcekitdInProc::getRuntimeLibPath(),
