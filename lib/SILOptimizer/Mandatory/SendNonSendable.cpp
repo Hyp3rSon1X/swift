@@ -818,6 +818,12 @@ void SendNonSendableImpl::runDiagnosticEvaluator() {
   // Then for each block...
   REGIONBASEDISOLATION_LOG(llvm::dbgs() << "Walking blocks for diagnostics.\n");
   for (auto [block, blockState] : info->getRange()) {
+    // A cancelled compilation (see ASTContext::CancellationFlag) stops the
+    // walk, which copies a partition per block and takes long on large
+    // functions; emitDiagnostics() then emits nothing.
+    if (info->getFunction()->getASTContext().isCancellationRequested())
+      break;
+
     REGIONBASEDISOLATION_LOG(llvm::dbgs()
                              << "|--> Block bb" << block.getDebugID() << "\n");
 
@@ -3824,6 +3830,8 @@ void SendNonSendableImpl::emitDiagnostics() {
                                         << function->getName() << "\n");
 
   runDiagnosticEvaluator();
+  if (function->getASTContext().isCancellationRequested())
+    return;
   emitUseAfterSendDiagnostics();
   emitVerbatimErrors();
 }
