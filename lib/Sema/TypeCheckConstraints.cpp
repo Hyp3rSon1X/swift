@@ -272,6 +272,11 @@ TypeChecker::typeCheckTarget(SyntacticElementTarget &target,
   PrettyStackTraceLocation stackTrace(Context, "type-checking-target",
                                       target.getLoc());
 
+  // A cancelled compilation does not type-check any further expressions; this
+  // covers the expressions that are not statements of a body.
+  if (diagnoseIfCancelled(Context, target.getLoc()))
+    return errorResult();
+
   if (!options.contains(TypeCheckExprFlags::AvoidInvalidatingAST)) {
     // First, pre-check the target, validating any types that occur in the
     // expression and folding sequence expressions.

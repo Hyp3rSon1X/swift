@@ -45,6 +45,9 @@ ERROR(error_closing_output,none,
 ERROR(error_mccas,none,
       "error trying to materialize MCCAS object file: %0", (StringRef))
 
+ERROR(compilation_cancelled,none,
+      "compilation cancelled", ())
+
 ERROR(cannot_find_group_info_file,none,
       "cannot find group info file at path: '%0'", (StringRef))
 

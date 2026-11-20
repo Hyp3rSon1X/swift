@@ -557,6 +557,13 @@ Type typeCheckParameterDefault(Expr *&defaultValue, DeclContext *DC,
 
 void typeCheckTopLevelCodeDecl(TopLevelCodeDecl *TLCD);
 
+/// Returns true if the compilation has been cancelled (see
+/// ASTContext::CancellationFlag), in which case the caller stops type checking
+/// and leaves invalid AST behind. Since the rest of the compiler expects
+/// invalid AST only together with an error, this emits one at \p loc unless
+/// an error has been emitted already.
+bool diagnoseIfCancelled(ASTContext &ctx, SourceLoc loc);
+
 void typeCheckDecl(Decl *D);
 
 void checkCircularOpaqueReturnTypeDecl(OpaqueTypeDecl *opaqueDecl);
