@@ -47,6 +47,14 @@ struct ServiceHooks {
   /// Called at the end of sourcekitd_initialize, after the service has been
   /// initialized.
   void (*ServiceInitialized)() = nullptr;
+
+  /// Called on the main queue with each notification for the handler of
+  /// sourcekitd_set_notification_handler, instead of calling the handler:
+  /// \c Deliver calls the handler with the notification. The hook calls
+  /// \c Deliver once, on any thread, before it returns or later, so that the
+  /// host decides where the handler runs (for example outside its crash
+  /// recovery around SourceKit's work items).
+  void (*DeliverNotification)(std::function<void()> Deliver) = nullptr;
 };
 
 /// Installs \p Hooks. Call it before sourcekitd_initialize.

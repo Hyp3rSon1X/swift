@@ -278,6 +278,18 @@ void postNotification(sourcekitd_response_t Notification) {
       sourcekitd_response_dispose(Notification);
       return;
     }
+    if (Hooks.DeliverNotification) {
+      // A later sourcekitd_set_notification_handler can replace the handler
+      // before the hook delivers the notification.
+      sourcekitd_response_receiver_t Receiver =
+          Block_copy(NotificationReceiver);
+      Hooks.DeliverNotification([=] {
+        // The receiver accepts ownership of the notification object.
+        Receiver(Notification);
+        Block_release(Receiver);
+      });
+      return;
+    }
     // The receiver accepts ownership of the notification object.
     NotificationReceiver(Notification);
   });
