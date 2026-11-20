@@ -18,6 +18,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticARCOptVisitor.h"
+#include "swift/AST/ASTContext.h"
 #include "swift/Basic/Assertions.h"
 #include "swift/Basic/Defer.h"
 #include "swift/SIL/DebugUtils.h"
@@ -72,6 +73,11 @@ bool SemanticARCOptVisitor::processWorklist() {
   bool madeChange = false;
 
   while (!worklist.empty()) {
+    // A cancelled compilation (see ASTContext::CancellationFlag) stops after
+    // the current value; each step leaves valid OSSA behind.
+    if (ctx.fn.getASTContext().isCancellationRequested())
+      break;
+
     // Pop the last element off the list. If we were returned None, we blotted
     // this element, so skip it.
     SILValue next = worklist.pop_back_val().value_or(SILValue());

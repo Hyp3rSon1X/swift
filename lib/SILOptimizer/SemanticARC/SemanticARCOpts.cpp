@@ -16,6 +16,7 @@
 #include "SemanticARCOptVisitor.h"
 #include "Transforms.h"
 
+#include "swift/AST/ASTContext.h"
 #include "swift/Basic/Assertions.h"
 #include "swift/Basic/Defer.h"
 #include "swift/SILOptimizer/Analysis/Analysis.h"
@@ -164,6 +165,16 @@ struct SemanticARCOpts : SILFunctionTransform {
 
     // Otherwise, perform our standard optimizations.
     bool didEliminateARCInsts = performPeepholes(visitor);
+
+    // If the compilation was cancelled, the worklist was not processed to the
+    // end and the phi information below is incomplete.
+    if (f.getASTContext().isCancellationRequested()) {
+      if (didEliminateARCInsts) {
+        updateAllGuaranteedPhis(getPassManager(), &f);
+        invalidateAnalysis(SILAnalysis::InvalidationKind::Instructions);
+      }
+      return;
+    }
 
     // Now that we have seeded the map of phis to incoming values that could be
     // converted to guaranteed, ignoring the phi, try convert those phis to be
