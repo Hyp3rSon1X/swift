@@ -1822,6 +1822,68 @@ static bool generateReproducer(CompilerInstance &Instance,
   return false;
 }
 
+namespace {
+/// Stands in front of the frontend's diagnostic consumers when the host can
+/// cancel the compilation (ASTContext::CancellationFlag). Once the flag is
+/// set, what the compiler still reports is about the work it left unfinished
+/// (requests that gave up, conformances and types that look wrong because
+/// they were never fully checked), so only "compilation cancelled" gets
+/// through.
+class CancellationDiagnosticFilter : public DiagnosticConsumer {
+  DiagnosticEngine *Diags = nullptr;
+  std::vector<DiagnosticConsumer *> Consumers;
+  std::shared_ptr<std::atomic<bool>> Flag;
+
+public:
+  CancellationDiagnosticFilter() = default;
+  CancellationDiagnosticFilter(const CancellationDiagnosticFilter &) = delete;
+  CancellationDiagnosticFilter &
+  operator=(const CancellationDiagnosticFilter &) = delete;
+
+  ~CancellationDiagnosticFilter() override {
+    if (!Diags)
+      return;
+    (void)Diags->takeConsumers();
+    for (auto *consumer : Consumers)
+      Diags->addConsumer(*consumer);
+  }
+
+  void install(DiagnosticEngine &diags,
+               std::shared_ptr<std::atomic<bool>> flag) {
+    Diags = &diags;
+    Flag = std::move(flag);
+    Consumers = diags.takeConsumers();
+    diags.addConsumer(*this);
+  }
+
+  void handleDiagnostic(SourceManager &SM,
+                        const DiagnosticInfo &Info) override {
+    if (Flag->load(std::memory_order_relaxed) &&
+        Info.ID != diag::compilation_cancelled.ID)
+      return;
+    for (auto *consumer : Consumers)
+      consumer->handleDiagnostic(SM, Info);
+  }
+
+  bool finishProcessing() override {
+    bool hadError = false;
+    for (auto *consumer : Consumers)
+      hadError |= consumer->finishProcessing();
+    return hadError;
+  }
+
+  void flush() override {
+    for (auto *consumer : Consumers)
+      consumer->flush();
+  }
+
+  void informDriverOfIncompleteBatchModeCompilation() override {
+    for (auto *consumer : Consumers)
+      consumer->informDriverOfIncompleteBatchModeCompilation();
+  }
+};
+} // end anonymous namespace
+
 /// Performs the compile requested by the user.
 /// \param Instance Will be reset after performIRGeneration when the verifier
 ///                 mode is NoVerify and there were no errors.
@@ -1854,8 +1916,22 @@ static bool performCompile(CompilerInstance &Instance, int &ReturnValue,
     return true;
   }() && "Only supports parsing .swift files");
 
+  // The ASTContext may be freed before LLVM runs, so keep its cancellation
+  // flag (see ASTContext::CancellationFlag).
+  std::shared_ptr<std::atomic<bool>> cancellationFlag;
+  if (Instance.hasASTContext())
+    cancellationFlag = Instance.getASTContext().CancellationFlag;
+
   bool hadError =
       performAction(Instance, ReturnValue, observer, CommandLineArgs);
+
+  // A compilation that stopped because it was cancelled reports so, whatever
+  // stage it stopped in. The error is fatal: if the type checker has reported
+  // it already, it is not reported again, and nothing after it is shown.
+  if (hadError && cancellationFlag &&
+      cancellationFlag->load(std::memory_order_relaxed))
+    Instance.getDiags().diagnose(SourceLoc(), diag::compilation_cancelled);
+
   auto canIgnoreErrorForExit = [&Instance, &opts]() {
     return opts.AllowModuleWithCompilerErrors ||
       (opts.isTypeCheckAction() && Instance.downgradeInterfaceVerificationErrors());
@@ -2717,6 +2793,13 @@ int swift::performFrontend(ArrayRef<const char *> Args,
     // Get the hashing output backend and free the compiler instance.
     HashBackend = VerifyInstance->getHashingBackend();
   }
+
+  // Lives until the end of this function, after the diagnostics have been
+  // processed.
+  CancellationDiagnosticFilter cancellationFilter;
+  if (Instance->hasASTContext())
+    if (auto flag = Instance->getASTContext().CancellationFlag)
+      cancellationFilter.install(Instance->getDiags(), flag);
 
   int ReturnValue = 0;
   bool HadError = performCompile(*Instance, ReturnValue, observer, Args);

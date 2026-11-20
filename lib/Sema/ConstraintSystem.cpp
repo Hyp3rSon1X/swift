@@ -4845,10 +4845,15 @@ void ConstraintSystem::maybeProduceFallbackDiagnostic(SourceLoc loc) const {
   if (Options.contains(ConstraintSystemFlags::SuppressDiagnostics))
     return;
 
+  // A solver that gave up because the compilation was cancelled (see
+  // ASTContext::CancellationFlag) reports the cancellation.
+  ASTContext &ctx = getASTContext();
+  if (TypeChecker::diagnoseIfCancelled(ctx))
+    return;
+
   // Before producing fatal error here, let's check if there are any "error"
   // diagnostics already emitted or waiting to be emitted. Because they are
   // a better indication of the problem.
-  ASTContext &ctx = getASTContext();
   if (ctx.hadError() ||
       (diagnosticTransaction && diagnosticTransaction->hasErrors()))
     return;

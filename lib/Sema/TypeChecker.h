@@ -560,9 +560,11 @@ void typeCheckTopLevelCodeDecl(TopLevelCodeDecl *TLCD);
 /// Returns true if the compilation has been cancelled (see
 /// ASTContext::CancellationFlag), in which case the caller stops type checking
 /// and leaves invalid AST behind. Since the rest of the compiler expects
-/// invalid AST only together with an error, this emits one at \p loc unless
-/// an error has been emitted already.
-bool diagnoseIfCancelled(ASTContext &ctx, SourceLoc loc);
+/// invalid AST only together with an error, this emits the fatal error
+/// "compilation cancelled" (without a location: where type checking stopped is
+/// of no use to the user), which also keeps anything diagnosed later from
+/// being shown.
+bool diagnoseIfCancelled(ASTContext &ctx);
 
 void typeCheckDecl(Decl *D);
 

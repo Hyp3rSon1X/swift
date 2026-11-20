@@ -2270,7 +2270,7 @@ Stmt *StmtChecker::visitBraceStmt(BraceStmt *BS) {
     // A cancelled compilation gets no further than the current element. The
     // callers that own a body replace it once they see the cancellation (see
     // TypeCheckFunctionBodyRequest), so nothing sees the unchecked rest.
-    if (TypeChecker::diagnoseIfCancelled(getASTContext(), elem.getStartLoc()))
+    if (TypeChecker::diagnoseIfCancelled(getASTContext()))
       break;
     typeCheckASTNode(elem);
   }
@@ -2278,11 +2278,15 @@ Stmt *StmtChecker::visitBraceStmt(BraceStmt *BS) {
   return BS;
 }
 
-bool TypeChecker::diagnoseIfCancelled(ASTContext &ctx, SourceLoc loc) {
+bool TypeChecker::diagnoseIfCancelled(ASTContext &ctx) {
   if (!ctx.isCancellationRequested())
     return false;
-  if (!ctx.Diags.hadAnyError())
-    ctx.Diags.diagnose(loc, diag::compilation_cancelled);
+  // Once one fatal error has been emitted, the diagnostic engine drops this
+  // one and every other diagnostic. Inside a DiagnosticSuppression the error
+  // would be dropped right away and yet keep the one emitted later (by the
+  // frontend, at the latest) from being shown.
+  if (!DiagnosticSuppression::isEnabled(ctx.Diags))
+    ctx.Diags.diagnose(SourceLoc(), diag::compilation_cancelled);
   return true;
 }
 
@@ -3081,7 +3085,7 @@ TypeCheckFunctionBodyRequest::evaluate(Evaluator &eval,
   };
 
   // A cancelled compilation does not start on further bodies.
-  if (TypeChecker::diagnoseIfCancelled(ctx, body->getStartLoc()))
+  if (TypeChecker::diagnoseIfCancelled(ctx))
     return errorBody();
 
   // First do a pre-check of the body.
@@ -3130,7 +3134,7 @@ TypeCheckFunctionBodyRequest::evaluate(Evaluator &eval,
   // If the compilation was cancelled while the body was being checked, parts
   // of it have not been type-checked. Return the error body before any of the
   // checks below walks it, the same as for any other failure.
-  if (TypeChecker::diagnoseIfCancelled(ctx, body->getStartLoc()))
+  if (TypeChecker::diagnoseIfCancelled(ctx))
     return errorBody();
 
   // Class constructor checking.
@@ -3163,7 +3167,7 @@ void TypeChecker::typeCheckTopLevelCodeDecl(TopLevelCodeDecl *TLCD) {
   // As for function bodies, a cancellation may have left parts of the body
   // unchecked: replace it with an error before anything walks it.
   auto &ctx = TLCD->getASTContext();
-  if (diagnoseIfCancelled(ctx, Body->getStartLoc())) {
+  if (diagnoseIfCancelled(ctx)) {
     auto range = Body->getSourceRange();
     TLCD->setBody(BraceStmt::create(
         ctx, range.Start, {new (ctx) ErrorExpr(range, ErrorType::get(ctx))},

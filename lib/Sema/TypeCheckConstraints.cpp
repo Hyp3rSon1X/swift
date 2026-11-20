@@ -274,7 +274,7 @@ TypeChecker::typeCheckTarget(SyntacticElementTarget &target,
 
   // A cancelled compilation does not type-check any further expressions; this
   // covers the expressions that are not statements of a body.
-  if (diagnoseIfCancelled(Context, target.getLoc()))
+  if (diagnoseIfCancelled(Context))
     return errorResult();
 
   if (!options.contains(TypeCheckExprFlags::AvoidInvalidatingAST)) {

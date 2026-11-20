@@ -937,6 +937,14 @@ ConstraintSystem::solve(SyntacticElementTarget &target,
 
 void ConstraintSystem::diagnoseTooComplex(SourceLoc fallbackLoc,
                                           SolutionResult &result) {
+  // A cancelled compilation (see ASTContext::CancellationFlag) makes the
+  // solver give up as if the expression were too complex; report the
+  // cancellation instead.
+  if (TypeChecker::diagnoseIfCancelled(getASTContext())) {
+    result.markAsDiagnosed();
+    return;
+  }
+
   auto affectedRange = result.getTooComplexAt();
 
   SourceLoc loc = (affectedRange ? affectedRange->Start : fallbackLoc);

@@ -45,7 +45,10 @@ ERROR(error_closing_output,none,
 ERROR(error_mccas,none,
       "error trying to materialize MCCAS object file: %0", (StringRef))
 
-ERROR(compilation_cancelled,none,
+// Fatal, so that it is reported once and nothing reported after it is shown:
+// whatever the compiler would report about the work it left unfinished would
+// be noise.
+ERROR(compilation_cancelled,Fatal,
       "compilation cancelled", ())
 
 ERROR(cannot_find_group_info_file,none,
