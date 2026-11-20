@@ -15,4 +15,6 @@ extern "C" {
 void initializeSwiftModules();
 }
 
+// Without Swift sources there is nothing to register, so calling this any
+// number of times, from any thread, is fine.
 void initializeSwiftModules() {}

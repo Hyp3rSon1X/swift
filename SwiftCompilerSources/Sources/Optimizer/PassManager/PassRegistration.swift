@@ -14,15 +14,26 @@ import AST
 import SIL
 import OptimizerBridging
 
+/// Registers the Swift classes, analyses and passes with the C++ side of the
+/// compiler. A process can contain several clients that call this, each at its
+/// own start (for example the frontend and an in-process sourcekitd or
+/// dependency scanner), possibly at the same time on different threads; the
+/// registration runs exactly once and a call returns only after it finished.
 @_cdecl("initializeSwiftModules")
 public func initializeSwiftModules() {
+  _ = swiftModulesRegistration
+}
+
+/// Registering a class twice aborts the compiler, so this is a global: Swift
+/// initializes it lazily, exactly once and thread-safely.
+private let swiftModulesRegistration: Void = {
   registerAST()
   registerSIL()
   registerSwiftAnalyses()
   registerOptimizerUtilities()
   registerSwiftPasses()
   registerOptimizerTests()
-}
+}()
 
 func registerPass(
       _ pass: ModulePass,

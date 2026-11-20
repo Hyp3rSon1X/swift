@@ -17,6 +17,10 @@
 extern "C" {
 #endif
 
+/// Registers the compiler's Swift modules (SwiftCompilerSources) with the C++
+/// side. Call it before any Swift code of the compiler runs. It may be called
+/// more than once and from several threads at the same time: the registration
+/// happens once, and every call returns after it is complete.
 void initializeSwiftModules();
 
 #ifdef __cplusplus
