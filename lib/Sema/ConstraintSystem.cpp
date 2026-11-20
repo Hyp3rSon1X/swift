@@ -69,8 +69,7 @@ bool ConstraintSystem::isTooComplex(size_t solutionMemory) {
   if (isAlreadyTooComplex.first)
     return true;
 
-  auto CancellationFlag = getASTContext().CancellationFlag;
-  if (CancellationFlag && CancellationFlag->load(std::memory_order_relaxed))
+  if (getASTContext().isCancellationRequested())
     return true;
 
   auto markTooComplex = [&](SourceRange range, StringRef reason) {

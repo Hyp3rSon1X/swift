@@ -1954,8 +1954,7 @@ void CompilerInstance::emitEndOfPipelineDebuggingOutput() {
 }
 
 bool CompilerInstance::isCancellationRequested() const {
-  auto flag = getASTContext().CancellationFlag;
-  return flag && flag->load(std::memory_order_relaxed);
+  return getASTContext().isCancellationRequested();
 }
 
 const PrimarySpecificPaths &

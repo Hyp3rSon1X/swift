@@ -310,8 +310,7 @@ TypeCheckPrimaryFileRequest::evaluate(Evaluator &eval, SourceFile *SF) const {
       // A host that cancels the compilation (ASTContext::CancellationFlag)
       // gets no further than the current declaration. Declarations that are
       // left out are still type checked lazily if something requests them.
-      if (Ctx.CancellationFlag &&
-          Ctx.CancellationFlag->load(std::memory_order_relaxed))
+      if (Ctx.isCancellationRequested())
         break;
       if (auto *TLCD = dyn_cast<TopLevelCodeDecl>(D)) {
         TypeChecker::typeCheckTopLevelCodeDecl(TLCD);
@@ -324,8 +323,7 @@ TypeCheckPrimaryFileRequest::evaluate(Evaluator &eval, SourceFile *SF) const {
     // and that have no error diagnosed, so nothing below may run on it; in
     // particular, the playground, PC macro and debugger testing transforms
     // expect fully type-checked code.
-    if (Ctx.CancellationFlag &&
-        Ctx.CancellationFlag->load(std::memory_order_relaxed))
+    if (Ctx.isCancellationRequested())
       return std::make_tuple<>();
 
     // Type-check macro-generated or implicitly-synthesized decls.
@@ -354,8 +352,7 @@ TypeCheckPrimaryFileRequest::evaluate(Evaluator &eval, SourceFile *SF) const {
     SF->typeCheckDelayedFunctions();
 
     // Function bodies that were left out are not type checked either.
-    if (Ctx.CancellationFlag &&
-        Ctx.CancellationFlag->load(std::memory_order_relaxed))
+    if (Ctx.isCancellationRequested())
       return std::make_tuple<>();
 
     for (auto *opaqueDecl : SF->getOpaqueReturnTypeDecls()) {

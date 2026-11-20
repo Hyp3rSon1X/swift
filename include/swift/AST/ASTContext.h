@@ -45,6 +45,7 @@
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Support/VersionTuple.h"
 #include "llvm/Support/VirtualOutputBackend.h"
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <utility>
@@ -366,6 +367,13 @@ public:
   /// The returned result will be discarded, so the operation that acknowledges
   /// the cancellation might return with any result.
   std::shared_ptr<std::atomic<bool>> CancellationFlag = nullptr;
+
+  /// Whether \c CancellationFlag is set, i.e. the current operation should be
+  /// aborted at the next possible opportunity.
+  bool isCancellationRequested() const {
+    return CancellationFlag &&
+           CancellationFlag->load(std::memory_order_relaxed);
+  }
 
   ide::TypeCheckCompletionCallback *CompletionCallback = nullptr;
 
