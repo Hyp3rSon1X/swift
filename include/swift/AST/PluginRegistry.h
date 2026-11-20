@@ -107,26 +107,47 @@ public:
                                          char **responseDataPtr,
                                          size_t *responseDataLengthPtr);
 
+  /// A message handler registered by a host with
+  /// 'setHandleMessageOverride()'. It has the contract of
+  /// 'HandleMessageFunction' and also receives the path of the in-process
+  /// plugin server whose messages it serves (as given to the compilation that
+  /// sends them; the compiler never opens it), so that one handler can serve
+  /// several compilations with different servers, at the same time.
+  using HostHandleMessageFunction = bool (*)(const char *serverPath,
+                                             const char *requestData,
+                                             size_t requestLength,
+                                             char **responseDataPtr,
+                                             size_t *responseDataLengthPtr);
+
   /// Register a process-wide message handler that replaces the
   /// 'swift_inproc_plugins_handle_message' entry point of the in-process
   /// plugin server. Once set, 'create()' uses it instead of loading the
   /// library at the server path. This is for hosts that link the compiler as
   /// a library and serve plugin messages themselves; set it before the first
   /// compilation.
-  static void setHandleMessageOverride(HandleMessageFunction fn);
+  static void setHandleMessageOverride(HostHandleMessageFunction fn);
 
   /// The handler registered with 'setHandleMessageOverride()', if any.
-  static HandleMessageFunction getHandleMessageOverride();
+  static HostHandleMessageFunction getHandleMessageOverride();
 
 private:
-  HandleMessageFunction handleMessageFn;
+  /// The server library's entry point, or null if a host handler serves the
+  /// messages.
+  HandleMessageFunction handleMessageFn = nullptr;
 
-  /// Temporary storage for the response data from 'handleMessageFn'.
+  /// The host's handler, if it serves the messages.
+  HostHandleMessageFunction hostHandleMessageFn = nullptr;
+
+  /// Temporary storage for the response data from the handler.
   std::string receivedResponse;
 
   InProcessPlugins(llvm::StringRef serverPath,
                    HandleMessageFunction handleMessageFn)
       : CompilerPlugin(serverPath), handleMessageFn(handleMessageFn) {}
+
+  InProcessPlugins(llvm::StringRef serverPath,
+                   HostHandleMessageFunction hostHandleMessageFn)
+      : CompilerPlugin(serverPath), hostHandleMessageFn(hostHandleMessageFn) {}
 
 public:
   /// Create an instance by loading the in-process plugin server at 'serverPath'

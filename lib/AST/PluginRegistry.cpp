@@ -45,14 +45,14 @@ CompilerPlugin::~CompilerPlugin() {
     this->cleanup();
 }
 
-static std::atomic<InProcessPlugins::HandleMessageFunction>
+static std::atomic<InProcessPlugins::HostHandleMessageFunction>
     HandleMessageOverride{nullptr};
 
-void InProcessPlugins::setHandleMessageOverride(HandleMessageFunction fn) {
+void InProcessPlugins::setHandleMessageOverride(HostHandleMessageFunction fn) {
   HandleMessageOverride.store(fn, std::memory_order_release);
 }
 
-InProcessPlugins::HandleMessageFunction
+InProcessPlugins::HostHandleMessageFunction
 InProcessPlugins::getHandleMessageOverride() {
   return HandleMessageOverride.load(std::memory_order_acquire);
 }
@@ -91,8 +91,12 @@ llvm::Error InProcessPlugins::sendMessage(llvm::StringRef message) {
 
   char *responseData = nullptr;
   size_t responseLength = 0;
-  bool hadError = handleMessageFn(message.data(), message.size(), &responseData,
-                                  &responseLength);
+  bool hadError =
+      hostHandleMessageFn
+          ? hostHandleMessageFn(getPath().data(), message.data(),
+                                message.size(), &responseData, &responseLength)
+          : handleMessageFn(message.data(), message.size(), &responseData,
+                            &responseLength);
 
   // 'responseData' now holds a response message or error message depending on
   // 'hadError'. Either way, it's our responsibility to deallocate it.
