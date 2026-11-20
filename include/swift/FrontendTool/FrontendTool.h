@@ -38,6 +38,13 @@ public:
   FrontendObserver() = default;
   virtual ~FrontendObserver() = default;
 
+  /// Whether performFrontend routes LLVM fatal errors through the frontend's
+  /// diagnostics, by installing LLVM's fatal error handler for the duration of
+  /// the call. That handler is process-wide: a host that runs other compiler
+  /// work in the same process at the same time (and installs a fatal error
+  /// handler of its own that tells the threads apart) returns false.
+  virtual bool shouldInstallFatalErrorHandler();
+
   /// The frontend has parsed the command line.
   virtual void parsedArgs(CompilerInvocation &invocation);
 

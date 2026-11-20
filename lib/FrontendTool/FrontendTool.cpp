@@ -2522,12 +2522,14 @@ int swift::performFrontend(ArrayRef<const char *> Args,
   //
   // Unfortunately it's not really safe to do anything else, since very
   // low-level operations in LLVM can trigger fatal errors.
-  llvm::ScopedFatalErrorHandler handler(
-      [](void *rawCallback, const char *reason, bool shouldCrash) {
-        auto *helper = static_cast<DiagnosticHelper *>(rawCallback);
-        helper->diagnoseFatalError(reason, shouldCrash);
-      },
-      &DH);
+  std::optional<llvm::ScopedFatalErrorHandler> handler;
+  if (!observer || observer->shouldInstallFatalErrorHandler())
+    handler.emplace(
+        [](void *rawCallback, const char *reason, bool shouldCrash) {
+          auto *helper = static_cast<DiagnosticHelper *>(rawCallback);
+          helper->diagnoseFatalError(reason, shouldCrash);
+        },
+        &DH);
 
   struct FinishDiagProcessingCheckRAII {
     bool CalledFinishDiagProcessing = false;
@@ -2772,6 +2774,7 @@ int swift::performFrontend(ArrayRef<const char *> Args,
   return r;
 }
 
+bool FrontendObserver::shouldInstallFatalErrorHandler() { return true; }
 void FrontendObserver::parsedArgs(CompilerInvocation &invocation) {}
 void FrontendObserver::configuredCompiler(CompilerInstance &instance) {}
 void FrontendObserver::performedSemanticAnalysis(CompilerInstance &instance) {}
