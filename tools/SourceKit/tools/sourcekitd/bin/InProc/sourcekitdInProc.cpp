@@ -46,6 +46,16 @@ static bool RequestBarriersEnabled = false;
 
 static void postNotification(sourcekitd_response_t Notification);
 
+static sourcekitdInProc::ServiceHooks Hooks;
+
+void sourcekitdInProc::setServiceHooks(const ServiceHooks &NewHooks) {
+  Hooks = NewHooks;
+}
+
+static bool shouldUseService() {
+  return !Hooks.ShouldUseService || Hooks.ShouldUseService();
+}
+
 static void getToolchainPrefixPath(llvm::SmallVectorImpl<char> &Path) {
 #if defined(_WIN32)
   MEMORY_BASIC_INFORMATION mbi;
@@ -105,6 +115,8 @@ void sourcekitd_load_client_plugins(void) {
 }
 
 void sourcekitd_initialize(void) {
+  if (!shouldUseService())
+    return;
   assert(msgHandlingQueue == nullptr && "Cannot initialize service twice");
   msgHandlingQueue = new WorkQueue(WorkQueue::Dequeuing::Concurrent,
                                    "sourcekitdInProc.msgHandlingQueue");
@@ -122,9 +134,13 @@ void sourcekitd_initialize(void) {
       sourcekitd::loadPlugins(registeredPlugins, pluginParams);
     });
   }
+  if (Hooks.ServiceInitialized)
+    Hooks.ServiceInitialized();
 }
 
 void sourcekitd_shutdown(void) {
+  if (!shouldUseService())
+    return;
   if (sourcekitd::shutdownClient()) {
     LOG_INFO_FUNC(High, "shutting down");
     sourcekitd::shutdownService();
@@ -154,17 +170,33 @@ static sourcekitd_request_handle_t create_request_handle(void) {
       handle.fetch_add(1, std::memory_order_relaxed));
 }
 
+/// Keeps a request alive for as long as a hook may hand it to the service.
+static std::shared_ptr<void> retainRequest(sourcekitd_object_t req) {
+  return std::shared_ptr<void>(sourcekitd_request_retain(req),
+                               sourcekitd_request_release);
+}
+
 sourcekitd_response_t sourcekitd_send_request_sync(sourcekitd_object_t req) {
   Semaphore sema(0);
 
   sourcekitd_response_t ReturnedResp;
+  sourcekitd::ResponseReceiver Receiver = [&](sourcekitd_response_t resp) {
+    ReturnedResp = resp;
+    sema.signal();
+  };
   // If the request runs sequentially, the client doesn't have a chance to
   // cancel it.
-  sourcekitd::handleRequest(req, /*CancellationToken=*/nullptr,
-                            [&](sourcekitd_response_t resp) {
-                              ReturnedResp = resp;
-                              sema.signal();
-                            });
+  if (Hooks.SendRequest) {
+    Hooks.SendRequest(req, /*Synchronous=*/true, Receiver,
+                      [Req = retainRequest(req)](
+                          sourcekitd::ResponseReceiver Receiver) {
+                        sourcekitd::handleRequest(
+                            Req.get(), /*CancellationToken=*/nullptr,
+                            std::move(Receiver));
+                      });
+  } else {
+    sourcekitd::handleRequest(req, /*CancellationToken=*/nullptr, Receiver);
+  }
 
   sema.wait();
   return ReturnedResp;
@@ -179,38 +211,45 @@ void sourcekitd_send_request(sourcekitd_object_t req,
     *out_handle = request_handle;
   }
 
-  sourcekitd_request_retain(req);
   receiver = Block_copy(receiver);
-  auto handler = [=] {
-    sourcekitd::handleRequest(req, /*CancellationToken=*/request_handle,
-                              [=](sourcekitd_response_t resp) {
-                                // The receiver accepts ownership of the
-                                // response.
-                                receiver(resp);
-                                Block_release(receiver);
-                              });
-    sourcekitd_request_release(req);
+  sourcekitd::ResponseReceiver Receiver = [=](sourcekitd_response_t resp) {
+    // The receiver accepts ownership of the response.
+    receiver(resp);
+    Block_release(receiver);
+  };
+  auto Send = [Req = retainRequest(req),
+               request_handle](sourcekitd::ResponseReceiver Receiver) {
+    auto handler = [=] {
+      sourcekitd::handleRequest(Req.get(),
+                                /*CancellationToken=*/request_handle, Receiver);
+    };
+
+    if (sourcekitd::requestIsEnableBarriers(Req.get())) {
+      RequestBarriersEnabled = true;
+      sourcekitd::sendBarriersEnabledResponse(Receiver);
+    } else if (RequestBarriersEnabled &&
+               sourcekitd::requestIsBarrier(Req.get())) {
+      msgHandlingQueue->dispatchBarrier(handler);
+    } else {
+      msgHandlingQueue->dispatchConcurrent(handler);
+    }
   };
 
-  if (sourcekitd::requestIsEnableBarriers(req)) {
-    RequestBarriersEnabled = true;
-    sourcekitd::sendBarriersEnabledResponse([=](sourcekitd_response_t resp) {
-      // The receiver accepts ownership of the response.
-      receiver(resp);
-      Block_release(receiver);
-    });
-  } else if (RequestBarriersEnabled && sourcekitd::requestIsBarrier(req)) {
-    msgHandlingQueue->dispatchBarrier(handler);
-  } else {
-    msgHandlingQueue->dispatchConcurrent(handler);
-  }
+  if (Hooks.SendRequest)
+    Hooks.SendRequest(req, /*Synchronous=*/false, Receiver, Send);
+  else
+    Send(Receiver);
 }
 
 void sourcekitd_cancel_request(sourcekitd_request_handle_t handle) {
+  if (!shouldUseService())
+    return;
   sourcekitd::cancelRequest(/*CancellationToken=*/handle);
 }
 
 void sourcekitd_request_handle_dispose(sourcekitd_request_handle_t handle) {
+  if (!shouldUseService())
+    return;
   sourcekitd::disposeCancellationToken(/*CancellationToken=*/handle);
 }
 
@@ -224,6 +263,8 @@ static sourcekitd_response_receiver_t NotificationReceiver;
 
 void
 sourcekitd_set_notification_handler(sourcekitd_response_receiver_t receiver) {
+  if (!shouldUseService())
+    return;
   sourcekitd_response_receiver_t newReceiver = Block_copy(receiver);
   WorkQueue::dispatchOnMain([=]{
     Block_release(NotificationReceiver);
