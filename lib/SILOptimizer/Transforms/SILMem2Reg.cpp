@@ -21,6 +21,7 @@
 #include "swift/SILOptimizer/Analysis/DeadEndBlocksAnalysis.h"
 #define DEBUG_TYPE "sil-mem2reg"
 
+#include "swift/AST/ASTContext.h"
 #include "swift/AST/DiagnosticsSIL.h"
 #include "swift/Basic/Assertions.h"
 #include "swift/Basic/GraphNodeWorklist.h"
@@ -2291,6 +2292,11 @@ bool MemoryToRegisters::run() {
       auto *asi = dyn_cast<AllocStackInst>(&inst);
       if (!asi)
         continue;
+
+      // A cancelled compilation (see ASTContext::CancellationFlag) stops after
+      // the current allocation; each promotion is complete on its own.
+      if (f.getASTContext().isCancellationRequested())
+        return madeChange;
 
       // Record stored values because promoting a store eliminates a consuming
       // use of the stored value. If promotion succeeds, these values'
