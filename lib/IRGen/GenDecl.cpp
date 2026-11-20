@@ -1232,6 +1232,11 @@ void IRGenerator::emitGlobalTopLevel(
   // Emit SIL functions.
   auto &m = PrimaryIGM->getSILModule();
   for (SILFunction &f : m) {
+    // A cancelled compilation (see ASTContext::CancellationFlag) gets no
+    // further than the current function; the caller drops the module.
+    if (SIL.getASTContext().isCancellationRequested())
+      return;
+
     // Generic functions should not be present in embedded Swift.
     //
     // TODO: Cannot enable this check yet because we first need removal of
@@ -1392,6 +1397,11 @@ void IRGenerator::emitLazyDefinitions() {
          !LazySpecializedClassMetadata.empty() ||
          !LazySpecializedValueMetadata.empty()
          ) {
+    // A cancelled compilation leaves the rest of the queues alone; the caller
+    // drops the module.
+    if (SIL.getASTContext().isCancellationRequested())
+      return;
+
     // Emit any lazy type metadata we require.
     while (!LazyTypeMetadata.empty()) {
       NominalTypeDecl *type = LazyTypeMetadata.pop_back_val();
@@ -1463,6 +1473,8 @@ void IRGenerator::emitLazyDefinitions() {
 
     // Emit any lazy function definitions we require.
     while (!LazyFunctionDefinitions.empty()) {
+      if (SIL.getASTContext().isCancellationRequested())
+        return;
       SILFunction *f = LazyFunctionDefinitions.pop_back_val();
       CurrentIGMPtr IGM = getGenModule(f);
       // In embedded Swift, we can gain public / externally-visible functions

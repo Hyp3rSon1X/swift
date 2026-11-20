@@ -1543,6 +1543,12 @@ GeneratedModule IRGenRequest::evaluate(Evaluator &evaluator,
   // Run SIL level IRGen preparation passes.
   runIRGenPreparePasses(*SILMod, IGM);
 
+  // A cancelled compilation (see ASTContext::CancellationFlag) may have
+  // stopped the preparation passes part way, and stops IR generation at the
+  // next function: don't return a module then.
+  if (Ctx.isCancellationRequested())
+    return GeneratedModule::null();
+
   (void)layoutStringsEnabled(IGM, /*diagnose*/ true);
 
   {
@@ -1562,8 +1568,14 @@ GeneratedModule IRGenRequest::evaluate(Evaluator &evaluator,
 
     IGM.addLinkLibraries();
 
+    if (Ctx.isCancellationRequested())
+      return GeneratedModule::null();
+
     // Okay, emit any definitions that we suddenly need.
     irgen.emitLazyDefinitions();
+
+    if (Ctx.isCancellationRequested())
+      return GeneratedModule::null();
 
     // Register our info with the runtime if needed.
     if (Opts.UseJIT) {
@@ -1824,6 +1836,11 @@ static void performParallelIRGeneration(IRGenDescriptor desc) {
     return;
   }
 
+  // As in IRGenRequest::evaluate, a cancelled compilation produces no
+  // modules.
+  if (Ctx.isCancellationRequested())
+    return;
+
   {
     FrontendStatsTracer tracer(Ctx.Stats, "IRGen");
 
@@ -1844,8 +1861,14 @@ static void performParallelIRGeneration(IRGenDescriptor desc) {
       }
     }
 
+    if (Ctx.isCancellationRequested())
+      return;
+
     // Okay, emit any definitions that we suddenly need.
     irgen.emitLazyDefinitions();
+
+    if (Ctx.isCancellationRequested())
+      return;
 
     irgen.emitSwiftProtocols();
 
