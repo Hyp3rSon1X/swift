@@ -32,6 +32,8 @@
 #include "llvm/Support/VersionTuple.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
+#include <atomic>
+#include <memory>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -649,6 +651,17 @@ public:
 
   /// Generate verbose assembly output with comments.
   bool VerboseAsm = true;
+
+  /// If set, LLVM optimization and code generation stop early once the flag
+  /// is \c true (see ASTContext::CancellationFlag, which is copied here
+  /// because the ASTContext may be freed before LLVM runs). Not a compiler
+  /// option: never part of a hash.
+  std::shared_ptr<std::atomic<bool>> CancellationFlag;
+
+  bool isCancellationRequested() const {
+    return CancellationFlag &&
+           CancellationFlag->load(std::memory_order_relaxed);
+  }
 
   IRGenOptions()
       : OutputKind(IRGenOutputKind::LLVMAssemblyAfterOptimization),

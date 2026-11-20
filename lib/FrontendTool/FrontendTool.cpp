@@ -2073,10 +2073,9 @@ static void freeASTContextIfPossible(CompilerInstance &Instance) {
   Instance.freeASTContext();
 }
 
-static bool generateCode(CompilerInstance &Instance, StringRef OutputFilename,
-                         llvm::Module *IRModule,
+static bool generateCode(CompilerInstance &Instance, const IRGenOptions &opts,
+                         StringRef OutputFilename, llvm::Module *IRModule,
                          llvm::GlobalVariable *HashGlobal) {
-  const auto &opts = Instance.getInvocation().getIRGenOptions();
   std::unique_ptr<llvm::TargetMachine> TargetMachine = createTargetMachine(
       opts, Instance.getASTContext(), Instance.getSharedCASInstance());
 
@@ -2118,7 +2117,11 @@ static bool performCompileStepsPostSILGen(
   const auto &opts = Invocation.getFrontendOptions();
   FrontendOptions::ActionType Action = opts.RequestedAction;
   const ASTContext &Context = Instance.getASTContext();
-  const IRGenOptions &IRGenOpts = Invocation.getIRGenOptions();
+
+  // IR generation and LLVM see the cancellation flag through the options,
+  // since the ASTContext may be freed before LLVM runs.
+  IRGenOptions IRGenOpts = Invocation.getIRGenOptions();
+  IRGenOpts.CancellationFlag = Context.CancellationFlag;
 
   std::optional<BufferIndirectlyCausingDiagnosticRAII> ricd;
   if (auto *SF = MSF.dyn_cast<SourceFile *>())
@@ -2369,8 +2372,8 @@ static bool performCompileStepsPostSILGen(
       return true;
   }
 
-  return generateCode(Instance, OutputFilename, IRModule.getModule(),
-                      HashGlobal);
+  return generateCode(Instance, IRGenOpts, OutputFilename,
+                      IRModule.getModule(), HashGlobal);
 }
 
 static void emitIndexDataForSourceFile(SourceFile *PrimarySourceFile,

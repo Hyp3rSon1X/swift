@@ -408,6 +408,13 @@ void swift::performLLVMOptimizations(
                               Opts.VerifyEach, PrintPassOpts);
   SI.registerCallbacks(PIC, &MAM);
 
+  // A cancelled compilation skips the remaining optional passes. The required
+  // ones still run, so the module stays valid.
+  if (auto flag = Opts.CancellationFlag)
+    PIC.registerShouldRunOptionalPassCallback([flag](StringRef, llvm::Any) {
+      return !flag->load(std::memory_order_relaxed);
+    });
+
   PassBuilder PB(TargetMachine, PTO, PGOOpt, &PIC, FS);
 
   // Attempt to load pass plugins and register their callbacks with PB.
@@ -771,6 +778,10 @@ bool swift::performLLVM(const IRGenOptions &Opts, DiagnosticEngine &Diags,
                         StringRef OutputFilename,
                         llvm::vfs::OutputBackend &Backend,
                         UnifiedStatsReporter *Stats) {
+  // A cancelled compilation (see IRGenOptions::CancellationFlag) produces no
+  // output.
+  if (Opts.isCancellationRequested())
+    return true;
 
   if (Opts.UseIncrementalLLVMCodeGen && HashGlobal) {
     // Check if we can skip the llvm part of the compilation if we have an
@@ -844,6 +855,18 @@ bool swift::performLLVM(const IRGenOptions &Opts, DiagnosticEngine &Diags,
 
   performLLVMOptimizations(Opts, Diags, DiagMutex, Module, TargetMachine, FS,
                            OutputFile ? &OutputFile->getOS() : nullptr);
+
+  // Once code generation has started it runs to the end, so a cancelled
+  // compilation stops before it. Discard the output file, which may hold
+  // bitcode or IR written by the optimization pipeline, instead of keeping it.
+  if (Opts.isCancellationRequested()) {
+    if (OutputFile) {
+      consumeError(OutputFile->discard());
+      OutputFile.reset();
+    }
+    Ctxt.setDiagnosticHandler(std::move(OldDiagnosticHandler));
+    return true;
+  }
 
   if (Stats) {
     if (DiagMutex)
@@ -1664,11 +1687,16 @@ struct LLVMCodeGenThreads {
                           << IGM->OutputFilename << "\n";
                    diagMutex->unlock(););
         embedBitcode(IGM->getModule(), parent.irgen->Opts);
-        performLLVM(parent.irgen->Opts, IGM->Context.Diags, diagMutex,
-                    IGM->ModuleHash, IGM->getModule(), IGM->TargetMachine.get(),
-                    IGM->Context.SourceMgr.getFileSystem(),
-                    IGM->OutputFilename, IGM->Context.getOutputBackend(),
-                    IGM->Context.Stats);
+        bool failed = performLLVM(
+            parent.irgen->Opts, IGM->Context.Diags, diagMutex, IGM->ModuleHash,
+            IGM->getModule(), IGM->TargetMachine.get(),
+            IGM->Context.SourceMgr.getFileSystem(), IGM->OutputFilename,
+            IGM->Context.getOutputBackend(), IGM->Context.Stats);
+        if (!failed && !IGM->OutputFilename.empty()) {
+          diagMutex->lock();
+          parent.finishedOutputs.push_back(IGM->OutputFilename.str().str());
+          diagMutex->unlock();
+        }
         if (IGM->Context.Diags.hadAnyError())
           return;
       }
@@ -1682,6 +1710,9 @@ struct LLVMCodeGenThreads {
   IRGenerator *irgen;
   llvm::sys::Mutex *diagMutex;
   std::vector<Thread> threads;
+  /// The outputs of the modules whose code generation finished (guarded by
+  /// diagMutex).
+  std::vector<std::string> finishedOutputs;
 
   LLVMCodeGenThreads(IRGenerator *irgen, llvm::sys::Mutex *diagMutex,
                      unsigned numThreads)
@@ -1965,6 +1996,11 @@ static void performParallelIRGeneration(IRGenDescriptor desc) {
     }
   }
 
+  // A cancelled compilation (see ASTContext::CancellationFlag) writes no
+  // output.
+  if (Ctx.isCancellationRequested())
+    return;
+
   // Write IR outputs if requested
   // In WMO mode, IR generation creates separate modules per source file
   auto irOutputFilenames = desc.parallelIROutputFilenames;
@@ -2020,6 +2056,15 @@ static void performParallelIRGeneration(IRGenDescriptor desc) {
   // Wait for all threads.
   releaseModuleThread.join();
   codeGenThreads.join();
+
+  // Once cancelled, the threads stop before the code generation of the
+  // modules they have not started, but the modules whose code generation
+  // finished have written their outputs (or kept an up-to-date one). A
+  // cancelled compilation leaves no output, so remove them.
+  if (Opts.isCancellationRequested()) {
+    for (auto &output : codeGenThreads.finishedOutputs)
+      (void)llvm::sys::fs::remove(output);
+  }
 }
 
 GeneratedModule swift::performIRGeneration(
