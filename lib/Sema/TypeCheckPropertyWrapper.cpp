@@ -672,7 +672,9 @@ PropertyWrapperBackingPropertyTypeRequest::evaluate(
 
   ASTContext &ctx = var->getASTContext();
   Type type = ctx.getSideCachedPropertyWrapperBackingPropertyType(var);
-  assert(type || ctx.Diags.hadAnyError());
+  // A cancelled compilation gives up on the initializer, perhaps without an
+  // error (see TypeChecker::diagnoseIfCancelled).
+  assert(type || ctx.Diags.hadAnyError() || ctx.isCancellationRequested());
 
   if (!type)
     return Type();

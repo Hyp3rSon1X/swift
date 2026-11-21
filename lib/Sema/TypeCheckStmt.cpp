@@ -3069,11 +3069,6 @@ TypeCheckFunctionBodyRequest::evaluate(Evaluator &eval,
 
   assert(body && "Expected body to type-check");
 
-  // It's possible we synthesized an already type-checked body, in which case
-  // we're done.
-  if (AFD->isBodyTypeChecked())
-    return body;
-
   auto errorBody = [&]() {
     // If we had an error, return an ErrorExpr body instead of returning the
     // un-type-checked body.
@@ -3084,9 +3079,16 @@ TypeCheckFunctionBodyRequest::evaluate(Evaluator &eval,
                              range.End);
   };
 
-  // A cancelled compilation does not start on further bodies.
+  // A cancelled compilation does not start on further bodies. This comes
+  // before the check below: a synthesizer that builds an already type-checked
+  // body may have been cancelled part way and left holes in it.
   if (TypeChecker::diagnoseIfCancelled(ctx))
     return errorBody();
+
+  // It's possible we synthesized an already type-checked body, in which case
+  // we're done.
+  if (AFD->isBodyTypeChecked())
+    return body;
 
   // First do a pre-check of the body.
   body = evaluateOrDefault(eval, PreCheckFunctionBodyRequest{AFD}, nullptr);

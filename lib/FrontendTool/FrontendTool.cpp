@@ -1228,9 +1228,11 @@ static void performEndOfPipelineActions(CompilerInstance &Instance) {
   // Make sure we emitted an error if we encountered an invalid conformance.
   // This is important since `ASTContext::hadError` accounts for delayed
   // conformance diags, so we need to ensure we don't exit with a non-zero exit
-  // code without emitting any error.
-  ASSERT(ctx.Diags.hadAnyError() || !ctx.hasDelayedConformanceErrors() &&
-         "Encountered invalid conformance without emitting error?");
+  // code without emitting any error. A cancelled compilation may leave a
+  // conformance it gave up on without one; it reports the cancellation.
+  ASSERT(ctx.Diags.hadAnyError() || ctx.isCancellationRequested() ||
+         !ctx.hasDelayedConformanceErrors() &&
+             "Encountered invalid conformance without emitting error?");
 }
 
 static bool printSwiftVersion(const CompilerInvocation &Invocation) {

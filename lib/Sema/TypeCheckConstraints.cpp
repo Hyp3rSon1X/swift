@@ -398,6 +398,12 @@ Type TypeChecker::typeCheckParameterDefault(Expr *&defaultValue,
       return defaultValue->getType();
     }
 
+    // A cancelled compilation does not try again with another contextual type
+    // (see ASTContext::CancellationFlag), which would also drop the
+    // cancellation error.
+    if (ctx.isCancellationRequested())
+      return Type();
+
     // Caller-side defaults are always type-checked based on the concrete
     // type of the argument deduced at a particular call site.
     if (isa<MagicIdentifierLiteralExpr>(defaultValue))

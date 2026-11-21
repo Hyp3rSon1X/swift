@@ -1566,8 +1566,11 @@ void StmtEmitter::visitForEachStmt(ForEachStmt *S) {
   SGF.OpaqueStmts[opaqueBodyStmt] = S->getBody();
   SWIFT_DEFER { SGF.OpaqueStmts.erase(opaqueBodyStmt); };
 
+  // Desugaring type-checks on demand, which a cancelled compilation (see
+  // ASTContext::CancellationFlag) stops.
   auto *braceStmt = S->getDesugaredStmt();
-  ASSERT(braceStmt || SGF.getASTContext().hadError());
+  ASSERT(braceStmt || SGF.getASTContext().hadError() ||
+         SGF.getASTContext().isCancellationRequested());
   if (braceStmt)
     visitBraceStmt(braceStmt);
 }

@@ -763,6 +763,15 @@ Expr *CallerSideDefaultArgExprRequest::evaluate(
   if (!TypeChecker::typeCheckParameterDefault(initExpr, dc, paramTy,
                                               param->isAutoClosure(),
                                               /*atCallerSide=*/true)) {
+    // A cancelled compilation gives up on the default (see
+    // ASTContext::CancellationFlag). Retrying it at the declaration below would
+    // drop the queued cancellation error and find no other one, so close the
+    // transaction and report the cancellation outside of it instead.
+    if (ctx.isCancellationRequested()) {
+      transaction.abort();
+      (void)TypeChecker::diagnoseIfCancelled(ctx);
+      return new (ctx) ErrorExpr(initExpr->getSourceRange(), paramTy);
+    }
     auto isSimpleLiteral = [&]() -> bool {
       switch (param->getDefaultArgumentKind()) {
 #define MAGIC_IDENTIFIER(NAME, STRING) \
@@ -786,7 +795,9 @@ Expr *CallerSideDefaultArgExprRequest::evaluate(
       // simple literals.
       transaction.abort();
       (void)param->getTypeCheckedDefaultExpr();
-      ASSERT(ctx.Diags.hadAnyError());
+      // A cancellation that lands during the retry fails it too, without an
+      // error if diagnostics are suppressed there.
+      ASSERT(ctx.Diags.hadAnyError() || ctx.isCancellationRequested());
     }
     return new (ctx) ErrorExpr(initExpr->getSourceRange(), paramTy);
   }

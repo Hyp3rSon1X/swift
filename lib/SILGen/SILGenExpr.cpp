@@ -7285,7 +7285,11 @@ RValue RValueEmitter::visitDefaultArgumentExpr(DefaultArgumentExpr *E,
 RValue RValueEmitter::visitErrorExpr(ErrorExpr *E, SGFContext C) {
   // Running into an ErrorExpr here means we've failed to lazily typecheck
   // something. Just emit an undef of the appropriate type and carry on.
-  if (SGF.getASTContext().Diags.hadAnyError())
+  // A cancelled compilation (see ASTContext::CancellationFlag) stops lazy type
+  // checking with ErrorExprs too, and its error may not have been emitted yet
+  // (or was dropped with a diagnostic transaction); it never writes output.
+  auto &ctx = SGF.getASTContext();
+  if (ctx.Diags.hadAnyError() || ctx.isCancellationRequested())
     return SGF.emitUndefRValue(E, E->getType());
 
   // Use report_fatal_error to ensure we trap in release builds instead of
