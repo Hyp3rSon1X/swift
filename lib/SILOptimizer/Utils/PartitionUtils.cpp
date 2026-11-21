@@ -815,6 +815,15 @@ void Partition::horizontalUpdate(
 
 bool Partition::popHistoryOnce(
     SmallVectorImpl<IsolationHistory> &foundJoinedHistoryNodes) {
+  // Rewinding a history that was never recorded silently finds nothing, which
+  // would read as "this value was never merged" rather than as a missing
+  // feature. So whoever rewinds must have built the Factory with recording on;
+  // asserts builds check it here.
+  assert(history.isEnabled() &&
+         "Rewinding an isolation history that was never recorded. The Factory "
+         "was built with recording off, but something is walking the history "
+         "anyway.");
+
   const auto *head = history.pop();
   if (!head)
     return false;
@@ -893,6 +902,9 @@ bool Partition::popHistoryOnce(
 // independent region.
 IsolationHistory::Node *
 IsolationHistory::pushNewElementRegion(Element element) {
+  if (!isEnabled())
+    return nullptr;
+
   unsigned size = Node::totalSizeToAlloc<Element>(0);
   void *mem = factory->allocator.Allocate(size, alignof(Node));
   head = new (mem) Node(Node::AddNewRegionForElement, head, element);
@@ -901,6 +913,9 @@ IsolationHistory::pushNewElementRegion(Element element) {
 
 IsolationHistory::Node *
 IsolationHistory::pushHistorySequenceBoundary(SILLocation loc) {
+  if (!isEnabled())
+    return nullptr;
+
   unsigned size = Node::totalSizeToAlloc<Element>(0);
   void *mem = factory->allocator.Allocate(size, alignof(Node));
   head = new (mem) Node(Node::SequenceBoundary, head, loc);
@@ -910,6 +925,9 @@ IsolationHistory::pushHistorySequenceBoundary(SILLocation loc) {
 // Push onto the history that \p value should be removed from any region that it
 // is apart of and placed within its own separate region.
 void IsolationHistory::pushRemoveLastElementFromRegion(Element element) {
+  if (!isEnabled())
+    return;
+
   unsigned size = Node::totalSizeToAlloc<Element>(0);
   void *mem = factory->allocator.Allocate(size, alignof(Node));
   head = new (mem) Node(Node::RemoveLastElementFromRegion, head, element);
@@ -917,6 +935,9 @@ void IsolationHistory::pushRemoveLastElementFromRegion(Element element) {
 
 void IsolationHistory::pushRemoveElementFromRegion(
     Element otherElementInOldRegion, Element element) {
+  if (!isEnabled())
+    return;
+
   unsigned size = Node::totalSizeToAlloc<Element>(1);
   void *mem = factory->allocator.Allocate(size, alignof(Node));
   head = new (mem) Node(Node::RemoveElementFromRegion, head, element,
@@ -925,6 +946,9 @@ void IsolationHistory::pushRemoveElementFromRegion(
 
 void IsolationHistory::pushMergeElementRegions(Element elementToMergeInto,
                                                ArrayRef<Element> eltsToMerge) {
+  if (!isEnabled())
+    return;
+
   assert(llvm::none_of(eltsToMerge,
                        [&](Element elt) { return elt == elementToMergeInto; }));
   unsigned size = Node::totalSizeToAlloc<Element>(eltsToMerge.size());
@@ -935,6 +959,9 @@ void IsolationHistory::pushMergeElementRegions(Element elementToMergeInto,
 
 // Push that \p other should be merged into this region.
 void IsolationHistory::pushCFGHistoryJoin(Node *otherNode) {
+  if (!isEnabled())
+    return;
+
   // If otherNode is nullptr or represents our same history, do not merge.
   if (!otherNode || otherNode == head)
     return;
