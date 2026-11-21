@@ -5262,7 +5262,9 @@ struct LocalFunctionEffectsChecker : ASTWalker {
 
   PreWalkAction walkToDeclPre(Decl *D) override {
     if (auto func = dyn_cast<AbstractFunctionDecl>(D)) {
-      if (func->getDeclContext()->isLocalContext())
+      // A skipped body was never type-checked, so its macros were never
+      // expanded and its effects cannot be checked.
+      if (func->getDeclContext()->isLocalContext() && !func->isBodySkipped())
         TypeChecker::checkFunctionEffects(func);
 
       return Action::SkipNode();
