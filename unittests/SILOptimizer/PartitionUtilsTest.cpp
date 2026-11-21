@@ -1345,6 +1345,35 @@ TEST(PersistentIndexMapTest, MaxKey) {
   EXPECT_EQ(map.getMaxKey(), std::nullopt);
 }
 
+TEST(PersistentIndexMapTest, LeafBoundariesAndAllValues) {
+  // Every unsigned is a valid value, and the entries at either end of a leaf
+  // are found by lookup, iteration and updateValues alike.
+  IndexMap map;
+  map.set(31, ~0u);
+  map.set(32, 0);
+  map.set(63, 5);
+  map.set(0, ~0u - 1);
+  expectSameEntries(map, {{0, ~0u - 1}, {31, ~0u}, {32, 0}, {63, 5}});
+  EXPECT_EQ(map.getMaxKey(), std::optional<unsigned>(63));
+
+  std::vector<unsigned> visited;
+  map.updateValues([&](unsigned key, unsigned value) {
+    visited.push_back(key);
+    return key == 31 ? 0 : value;
+  });
+  EXPECT_EQ(visited, (std::vector<unsigned>{0, 31, 32, 63}));
+  expectSameEntries(map, {{0, ~0u - 1}, {31, 0}, {32, 0}, {63, 5}});
+
+  // An erased entry leaves its leaf as if the key had never been set.
+  IndexMap other;
+  other.set(0, ~0u - 1);
+  other.set(32, 0);
+  other.set(63, 5);
+  EXPECT_FALSE(map == other);
+  map.erase(31);
+  EXPECT_TRUE(map == other);
+}
+
 TEST(PartitionUtilsTest, JoinIntoEmptyPartition) {
   // Joining into a partition without elements takes the other partition as it
   // is, and records the history an element by element join would.

@@ -31,6 +31,7 @@
 #ifndef SWIFT_SILOPTIMIZER_UTILS_PERSISTENTINDEXMAP_H
 #define SWIFT_SILOPTIMIZER_UTILS_PERSISTENTINDEXMAP_H
 
+#include "llvm/ADT/bit.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -45,8 +46,7 @@ namespace swift {
 /// sharing between copies.
 ///
 /// \p KeyT and \p ValueT must convert to and from unsigned. Keys should be
-/// dense (the trie is as deep as the largest key needs); the value ~0U is
-/// reserved to mark a missing entry.
+/// small (the trie is as deep as the largest key needs).
 ///
 /// Copies are not thread safe: a map and its copies share reference counted
 /// nodes without synchronization.
@@ -55,19 +55,26 @@ class PersistentIndexMap {
   static constexpr unsigned BitsPerLevel = 5;
   static constexpr unsigned Fanout = 1u << BitsPerLevel;
   static constexpr unsigned LevelMask = Fanout - 1;
-
-  /// The raw value stored in a leaf slot whose key is not in the map.
-  static constexpr unsigned Absent = ~0u;
+  static_assert(Fanout == 32, "A leaf's occupied slots are a 32-bit mask");
 
   struct Node {
     unsigned refCount = 1;
   };
 
   struct Leaf : Node {
-    unsigned values[Fanout];
+    /// Bit i is set if slot i holds an entry. Walks visit only the set bits:
+    /// the keys a partition holds can be far apart, since every value the
+    /// analysis looks at gets an element number but only some of them are
+    /// tracked, and scanning every slot would make a walk cost the key range
+    /// instead of the number of entries.
+    uint32_t occupied = 0;
 
-    Leaf() { std::fill(std::begin(values), std::end(values), Absent); }
-    Leaf(const Leaf &other) : Node() {
+    /// Free slots hold zero, so leaves with the same entries are bytewise
+    /// equal.
+    unsigned values[Fanout] = {};
+
+    Leaf() = default;
+    Leaf(const Leaf &other) : Node(), occupied(other.occupied) {
       std::copy(std::begin(other.values), std::end(other.values),
                 std::begin(values));
     }
@@ -166,16 +173,19 @@ public:
 
   /// Map \p key to \p value, replacing any value \p key had.
   void set(KeyT key, ValueT value) {
+    unsigned rawKey = unsigned(key);
     unsigned rawValue = unsigned(value);
-    assert(rawValue != Absent && "~0U is reserved for missing entries");
     // Leave shared nodes alone if nothing changes.
-    if (const unsigned *slot = findSlot(unsigned(key)))
+    if (const unsigned *slot = findSlot(rawKey))
       if (*slot == rawValue)
         return;
-    unsigned &slot = getMutableSlot(unsigned(key));
-    if (slot == Absent)
+    Leaf &leaf = getMutableLeaf(rawKey);
+    unsigned index = rawKey & LevelMask;
+    if (!(leaf.occupied & bitOf(index))) {
+      leaf.occupied |= bitOf(index);
       ++numEntries;
-    slot = rawValue;
+    }
+    leaf.values[index] = rawValue;
   }
 
   /// Map \p key to \p value if \p key is not in the map yet. Returns true if
@@ -191,7 +201,10 @@ public:
   bool erase(KeyT key) {
     if (!count(key))
       return false;
-    getMutableSlot(unsigned(key)) = Absent;
+    Leaf &leaf = getMutableLeaf(unsigned(key));
+    unsigned index = unsigned(key) & LevelMask;
+    leaf.occupied &= ~bitOf(index);
+    leaf.values[index] = 0;
     --numEntries;
     return true;
   }
@@ -278,11 +291,9 @@ public:
     const_iterator &operator++() {
       assert(leaf && "Incrementing the end iterator");
       // Look at the rest of the current leaf first...
-      for (unsigned i = (key & LevelMask) + 1; i < Fanout; ++i) {
-        if (leaf->values[i] != Absent) {
-          key = (key & ~LevelMask) | i;
-          return *this;
-        }
+      if (uint32_t later = leaf->occupied & bitsFrom((key & LevelMask) + 1)) {
+        key = (key & ~LevelMask) | unsigned(llvm::countr_zero(later));
+        return *this;
       }
       // ... and only then search the trie for the next leaf.
       *this = map->findFirstAtOrAfter(uint64_t(key | LevelMask) + 1);
@@ -314,6 +325,13 @@ private:
   static bool fitsInHeight(unsigned key, unsigned height) {
     unsigned bits = BitsPerLevel * (height + 1);
     return bits >= 32 || (key >> bits) == 0;
+  }
+
+  static uint32_t bitOf(unsigned index) { return uint32_t(1) << index; }
+
+  /// The bits of the leaf slots at or after \p index.
+  static uint32_t bitsFrom(uint64_t index) {
+    return index < Fanout ? ~uint32_t(0) << index : 0;
   }
 
   static uint64_t spanOfLevel(unsigned level) {
@@ -356,15 +374,15 @@ private:
       if (!node)
         return nullptr;
     }
-    const unsigned *slot =
-        &static_cast<const Leaf *>(node)->values[key & LevelMask];
-    return *slot == Absent ? nullptr : slot;
+    auto *leaf = static_cast<const Leaf *>(node);
+    unsigned index = key & LevelMask;
+    return (leaf->occupied & bitOf(index)) ? &leaf->values[index] : nullptr;
   }
 
-  /// Return the slot of \p key, creating the nodes leading to it and copying
-  /// those shared with other maps, so that writing the slot only affects this
-  /// map.
-  unsigned &getMutableSlot(unsigned key) {
+  /// Return the leaf that holds \p key, creating the nodes leading to it and
+  /// copying those shared with other maps, so that writing the leaf only
+  /// affects this map.
+  Leaf &getMutableLeaf(unsigned key) {
     if (!root) {
       height = 0;
       while (!fitsInHeight(key, height))
@@ -394,7 +412,7 @@ private:
         node = copy;
       }
       if (level == 0)
-        return static_cast<Leaf *>(node)->values[key & LevelMask];
+        return *static_cast<Leaf *>(node);
       ref = &static_cast<Interior *>(node)->children[indexAt(key, level)];
     }
   }
@@ -413,13 +431,11 @@ private:
 
     if (level == 0) {
       auto *leaf = static_cast<Leaf *>(node);
-      for (unsigned i = 0; i < Fanout; ++i) {
+      for (uint32_t bits = leaf->occupied; bits; bits &= bits - 1) {
+        unsigned i = unsigned(llvm::countr_zero(bits));
         unsigned oldValue = leaf->values[i];
-        if (oldValue == Absent)
-          continue;
         unsigned newValue =
             unsigned(fn(KeyT(unsigned(base + i)), ValueT(oldValue)));
-        assert(newValue != Absent && "~0U is reserved for missing entries");
         if (newValue == oldValue)
           continue;
         if (result == node && !isUnique)
@@ -453,11 +469,8 @@ private:
   static bool isEmptyNode(const Node *node, unsigned level) {
     if (!node)
       return true;
-    if (level == 0) {
-      auto *leaf = static_cast<const Leaf *>(node);
-      return std::all_of(std::begin(leaf->values), std::end(leaf->values),
-                         [](unsigned value) { return value == Absent; });
-    }
+    if (level == 0)
+      return static_cast<const Leaf *>(node)->occupied == 0;
     auto *interior = static_cast<const Interior *>(node);
     return std::all_of(
         std::begin(interior->children), std::end(interior->children),
@@ -474,7 +487,8 @@ private:
     if (level == 0) {
       auto *lhsLeaf = static_cast<const Leaf *>(lhs);
       auto *rhsLeaf = static_cast<const Leaf *>(rhs);
-      return std::equal(std::begin(lhsLeaf->values), std::end(lhsLeaf->values),
+      return lhsLeaf->occupied == rhsLeaf->occupied &&
+             std::equal(std::begin(lhsLeaf->values), std::end(lhsLeaf->values),
                         std::begin(rhsLeaf->values));
     }
     auto *lhsInterior = static_cast<const Interior *>(lhs);
@@ -501,14 +515,12 @@ private:
                         unsigned &foundKey) {
     if (level == 0) {
       auto *leaf = static_cast<const Leaf *>(node);
-      for (uint64_t i = from > base ? from - base : 0; i < Fanout; ++i) {
-        if (leaf->values[i] != Absent) {
-          foundLeaf = leaf;
-          foundKey = unsigned(base + i);
-          return true;
-        }
-      }
-      return false;
+      uint32_t bits = leaf->occupied & bitsFrom(from > base ? from - base : 0);
+      if (!bits)
+        return false;
+      foundLeaf = leaf;
+      foundKey = unsigned(base + llvm::countr_zero(bits));
+      return true;
     }
     auto *interior = static_cast<const Interior *>(node);
     uint64_t span = spanOfLevel(level);
@@ -525,13 +537,11 @@ private:
                        unsigned &foundKey) {
     if (level == 0) {
       auto *leaf = static_cast<const Leaf *>(node);
-      for (unsigned i = Fanout; i-- > 0;) {
-        if (leaf->values[i] != Absent) {
-          foundKey = unsigned(base + i);
-          return true;
-        }
-      }
-      return false;
+      if (!leaf->occupied)
+        return false;
+      foundKey =
+          unsigned(base + (Fanout - 1) - llvm::countl_zero(leaf->occupied));
+      return true;
     }
     auto *interior = static_cast<const Interior *>(node);
     uint64_t span = spanOfLevel(level);
