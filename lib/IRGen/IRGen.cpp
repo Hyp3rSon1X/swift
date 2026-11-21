@@ -1507,6 +1507,18 @@ getSymbolSourcesToEmit(const IRGenDescriptor &desc) {
 }
 } // end of anonymous namespace
 
+/// IR generation that stops because the compilation was cancelled (see
+/// ASTContext::CancellationFlag) reports it as an error. It is the only place
+/// that decides about a cancellation for the work it covers: the frontend
+/// takes a missing module without an error for parallel IR generation that
+/// finished, outputs included.
+static bool reportIfCancelled(ASTContext &Ctx) {
+  if (!Ctx.isCancellationRequested())
+    return false;
+  Ctx.Diags.diagnose(SourceLoc(), diag::compilation_cancelled);
+  return true;
+}
+
 /// Generates LLVM IR, runs the LLVM passes and produces the output file.
 /// All this is done in a single thread.
 GeneratedModule IRGenRequest::evaluate(Evaluator &evaluator,
@@ -1569,7 +1581,7 @@ GeneratedModule IRGenRequest::evaluate(Evaluator &evaluator,
   // A cancelled compilation (see ASTContext::CancellationFlag) may have
   // stopped the preparation passes part way, and stops IR generation at the
   // next function: don't return a module then.
-  if (Ctx.isCancellationRequested())
+  if (reportIfCancelled(Ctx))
     return GeneratedModule::null();
 
   (void)layoutStringsEnabled(IGM, /*diagnose*/ true);
@@ -1591,13 +1603,13 @@ GeneratedModule IRGenRequest::evaluate(Evaluator &evaluator,
 
     IGM.addLinkLibraries();
 
-    if (Ctx.isCancellationRequested())
+    if (reportIfCancelled(Ctx))
       return GeneratedModule::null();
 
     // Okay, emit any definitions that we suddenly need.
     irgen.emitLazyDefinitions();
 
-    if (Ctx.isCancellationRequested())
+    if (reportIfCancelled(Ctx))
       return GeneratedModule::null();
 
     // Register our info with the runtime if needed.
@@ -1869,7 +1881,7 @@ static void performParallelIRGeneration(IRGenDescriptor desc) {
 
   // As in IRGenRequest::evaluate, a cancelled compilation produces no
   // modules.
-  if (Ctx.isCancellationRequested())
+  if (reportIfCancelled(Ctx))
     return;
 
   {
@@ -1892,13 +1904,13 @@ static void performParallelIRGeneration(IRGenDescriptor desc) {
       }
     }
 
-    if (Ctx.isCancellationRequested())
+    if (reportIfCancelled(Ctx))
       return;
 
     // Okay, emit any definitions that we suddenly need.
     irgen.emitLazyDefinitions();
 
-    if (Ctx.isCancellationRequested())
+    if (reportIfCancelled(Ctx))
       return;
 
     irgen.emitSwiftProtocols();
@@ -1998,12 +2010,13 @@ static void performParallelIRGeneration(IRGenDescriptor desc) {
 
   // A cancelled compilation (see ASTContext::CancellationFlag) writes no
   // output.
-  if (Ctx.isCancellationRequested())
+  if (reportIfCancelled(Ctx))
     return;
 
   // Write IR outputs if requested
   // In WMO mode, IR generation creates separate modules per source file
   auto irOutputFilenames = desc.parallelIROutputFilenames;
+  std::vector<std::string> writtenIROutputs;
 
   if (!irOutputFilenames.empty()) {
     auto IRIter = irOutputFilenames.begin();
@@ -2023,6 +2036,7 @@ static void performParallelIRGeneration(IRGenDescriptor desc) {
           if (!EC) {
             IGM->getModule()->print(irOut, nullptr);
             irOut.close();
+            writtenIROutputs.push_back(irOutputPath);
           } else {
             Ctx.Diags.diagnose(SourceLoc(), diag::error_opening_output,
                                irOutputPath, EC.message());
@@ -2059,10 +2073,14 @@ static void performParallelIRGeneration(IRGenDescriptor desc) {
 
   // Once cancelled, the threads stop before the code generation of the
   // modules they have not started, but the modules whose code generation
-  // finished have written their outputs (or kept an up-to-date one). A
-  // cancelled compilation leaves no output, so remove them.
-  if (Opts.isCancellationRequested()) {
+  // finished have written their outputs (or kept an up-to-date one), and the
+  // IR outputs were written before. A cancelled compilation leaves no output,
+  // so remove them. This is the last check: a cancellation after it finds the
+  // compilation finished.
+  if (reportIfCancelled(Ctx)) {
     for (auto &output : codeGenThreads.finishedOutputs)
+      (void)llvm::sys::fs::remove(output);
+    for (auto &output : writtenIROutputs)
       (void)llvm::sys::fs::remove(output);
   }
 }

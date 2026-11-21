@@ -2419,8 +2419,20 @@ static bool performCompileStepsPostSILGen(
       IRGenOpts.DebugModuleSelfKey ? Instance.getCompilerBaseKey()
                                    : std::nullopt);
 
+  // If no IRModule is available, bail. This can either happen if IR generation
+  // fails, or if parallelIRGen happened correctly (in which case it would have
+  // already performed LLVM). IR generation reports a cancellation as an error,
+  // and parallel IR generation decides about one itself, after its outputs are
+  // written (removing them when cancelled).
+  if (!IRModule)
+    return Instance.getDiags().hadAnyError();
+
+  // Cancellation check after IRGen, before anything is written.
+  if (Instance.isCancellationRequested())
+    return true;
+
   // Write extra LLVM IR output if requested
-  if (IRModule && !PSPs.SupplementaryOutputs.LLVMIROutputPath.empty()) {
+  if (!PSPs.SupplementaryOutputs.LLVMIROutputPath.empty()) {
     if (withOutputPath(Instance.getDiags(), Instance.getOutputBackend(),
                        PSPs.SupplementaryOutputs.LLVMIROutputPath,
                        [&](raw_ostream &out) -> bool {
@@ -2429,16 +2441,6 @@ static bool performCompileStepsPostSILGen(
                        }))
       return true;
   }
-
-  // Cancellation check after IRGen.
-  if (Instance.isCancellationRequested())
-    return true;
-
-  // If no IRModule is available, bail. This can either happen if IR generation
-  // fails, or if parallelIRGen happened correctly (in which case it would have
-  // already performed LLVM).
-  if (!IRModule)
-    return Instance.getDiags().hadAnyError();
 
   if (validateTBDIfNeeded(Invocation, MSF, *IRModule.getModule()))
     return true;
@@ -2450,8 +2452,26 @@ static bool performCompileStepsPostSILGen(
       return true;
   }
 
-  return generateCode(Instance, IRGenOpts, OutputFilename,
-                      IRModule.getModule(), HashGlobal);
+  bool hadError = generateCode(Instance, IRGenOpts, OutputFilename,
+                               IRModule.getModule(), HashGlobal);
+
+  // performLLVM decides about a cancellation for the object; a cancelled one
+  // writes none, so remove the empty files and the IR output too. An object
+  // left at the output path by an earlier build stays (performLLVM never
+  // opened it), unlike parallel IR generation, which removes every object it
+  // finished, up-to-date ones it kept included.
+  if (hadError && IRGenOpts.isCancellationRequested()) {
+    auto removeOutput = [](StringRef path) {
+      if (!path.empty() && path != "-")
+        (void)llvm::sys::fs::remove(path);
+    };
+    if (IRGenOpts.UseSingleModuleLLVMEmission)
+      for (auto &fileName : ParallelOutputFilenames)
+        if (fileName != ParallelOutputFilenames[0])
+          removeOutput(fileName);
+    removeOutput(PSPs.SupplementaryOutputs.LLVMIROutputPath);
+  }
+  return hadError;
 }
 
 static void emitIndexDataForSourceFile(SourceFile *PrimarySourceFile,
