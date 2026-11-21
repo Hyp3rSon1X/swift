@@ -20,6 +20,7 @@
 #include "swift/SIL/SILFunction.h"
 #include "swift/SIL/SILInstruction.h"
 #include "swift/SILOptimizer/Utils/InstOptUtils.h"
+#include "swift/SILOptimizer/Utils/PersistentIndexMap.h"
 #include "swift/SILOptimizer/Utils/RegionIsolation.h"
 #include "swift/SILOptimizer/Utils/SILIsolationInfo.h"
 
@@ -821,7 +822,12 @@ private:
 
   /// Label each index with a non-negative (unsigned) label if it is associated
   /// with a valid region.
-  std::map<Element, Region> elementToRegionMap;
+  ///
+  /// This is a persistent map: the region analysis keeps two partitions per
+  /// basic block and copies partitions for every block it evaluates, and
+  /// copies share the structure they have in common, so a copy costs O(1) and
+  /// a mutation copies only the touched path.
+  PersistentIndexMap<Element, Region> elementToRegionMap;
 
   /// Track a label that is guaranteed to be strictly larger than all in use,
   /// and therefore safe for use as a fresh label.
@@ -838,12 +844,12 @@ private:
 
 public:
   Partition(IsolationHistory history)
-      : elementToRegionMap({}), history(history), canonical(true) {}
+      : elementToRegionMap(), history(history), canonical(true) {}
 
   /// 1-arg constructor used when canonicality will be immediately invalidated,
   /// so set to false to begin with
   Partition(IsolationHistory history, bool canonical)
-      : elementToRegionMap({}), history(history), canonical(canonical) {}
+      : elementToRegionMap(), history(history), canonical(canonical) {}
 
   /// Return a new Partition that has a single region containing the elements of
   /// \p indices.
@@ -901,7 +907,7 @@ public:
 
   Region getRegion(Element elt) const { return elementToRegionMap.at(elt); }
 
-  using iterator = std::map<Element, Region>::iterator;
+  using iterator = PersistentIndexMap<Element, Region>::const_iterator;
   iterator begin() { return elementToRegionMap.begin(); }
   iterator end() { return elementToRegionMap.end(); }
   llvm::iterator_range<iterator> range() { return {begin(), end()}; }
@@ -1017,19 +1023,19 @@ public:
   }
 
   bool isSent(Element val) const {
-    auto iter = elementToRegionMap.find(val);
-    if (iter == elementToRegionMap.end())
+    auto region = elementToRegionMap.lookup(val);
+    if (!region)
       return false;
-    return regionToSendingOpMap.count(iter->second);
+    return regionToSendingOpMap.count(*region);
   }
 
   /// Return the instruction that sent \p val's region or nullptr
   /// otherwise.
   SendingOperandSet *getSentOperandSet(Element val) const {
-    auto iter = elementToRegionMap.find(val);
-    if (iter == elementToRegionMap.end())
+    auto region = elementToRegionMap.lookup(val);
+    if (!region)
       return nullptr;
-    auto iter2 = regionToSendingOpMap.find(iter->second);
+    auto iter2 = regionToSendingOpMap.find(*region);
     if (iter2 == regionToSendingOpMap.end())
       return nullptr;
     auto *set = iter2->second;

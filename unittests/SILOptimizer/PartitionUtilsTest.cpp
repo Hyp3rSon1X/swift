@@ -15,6 +15,8 @@
 #include "gtest/gtest.h"
 
 #include <array>
+#include <map>
+#include <random>
 
 using namespace swift;
 using namespace swift::PartitionPrimitives;
@@ -1039,4 +1041,245 @@ TEST(PartitionUtilsTest, TestHistory_JoiningEmptyAndNotEmpty) {
   // Since p2 doesn't have any history, we do not actually perform any join and
   // thus do not insert a CFGHistory change.
   EXPECT_TRUE(result.historySize() == 2);
+}
+
+//===----------------------------------------------------------------------===//
+//                         MARK: PersistentIndexMap
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+using IndexMap = PersistentIndexMap<unsigned, unsigned>;
+using ReferenceMap = std::map<unsigned, unsigned>;
+
+void expectSameEntries(const IndexMap &map, const ReferenceMap &reference) {
+  EXPECT_EQ(map.size(), reference.size());
+  EXPECT_EQ(map.empty(), reference.empty());
+  std::vector<std::pair<unsigned, unsigned>> entries(map.begin(), map.end());
+  std::vector<std::pair<unsigned, unsigned>> expected(reference.begin(),
+                                                      reference.end());
+  EXPECT_EQ(entries, expected);
+  for (auto [key, value] : reference) {
+    EXPECT_TRUE(map.count(key));
+    EXPECT_EQ(map.at(key), value);
+    EXPECT_EQ(map.lookup(key), std::optional<unsigned>(value));
+  }
+}
+
+} // namespace
+
+TEST(PersistentIndexMapTest, Basic) {
+  IndexMap map;
+  EXPECT_TRUE(map.empty());
+  EXPECT_TRUE(map.begin() == map.end());
+  EXPECT_FALSE(map.count(0));
+  EXPECT_EQ(map.lookup(5), std::nullopt);
+
+  EXPECT_TRUE(map.insert(5, 1));
+  EXPECT_FALSE(map.insert(5, 2));
+  EXPECT_EQ(map.at(5), 1u);
+  map.set(5, 3);
+  EXPECT_EQ(map.at(5), 3u);
+  EXPECT_EQ(map.size(), 1u);
+
+  // Keys far apart grow the trie; iteration stays in key order.
+  map.set(1u << 20, 7);
+  map.set(0, 9);
+  map.set(~0u - 1, 11);
+  expectSameEntries(map, {{0, 9}, {5, 3}, {1u << 20, 7}, {~0u - 1, 11}});
+
+  EXPECT_TRUE(map.erase(5));
+  EXPECT_FALSE(map.erase(5));
+  EXPECT_FALSE(map.erase(6));
+  expectSameEntries(map, {{0, 9}, {1u << 20, 7}, {~0u - 1, 11}});
+
+  map.clear();
+  expectSameEntries(map, {});
+}
+
+TEST(PersistentIndexMapTest, CopiesAreIndependent) {
+  IndexMap original;
+  ReferenceMap originalReference;
+  for (unsigned i = 0; i < 3000; i += 3) {
+    original.set(i, i + 1);
+    originalReference[i] = i + 1;
+  }
+
+  IndexMap copy = original;
+  EXPECT_TRUE(copy == original);
+  ReferenceMap copyReference = originalReference;
+
+  copy.set(3, 100);
+  copy.set(3001, 5);
+  copy.erase(2997);
+  copyReference[3] = 100;
+  copyReference[3001] = 5;
+  copyReference.erase(2997);
+  copy.updateValues(
+      [](unsigned key, unsigned value) { return key % 2 ? value * 2 : value; });
+  for (auto &[key, value] : copyReference)
+    if (key % 2)
+      value *= 2;
+
+  expectSameEntries(original, originalReference);
+  expectSameEntries(copy, copyReference);
+  EXPECT_FALSE(copy == original);
+
+  // Mutating the original leaves the copy alone too.
+  original.set(1, 1);
+  originalReference[1] = 1;
+  expectSameEntries(original, originalReference);
+  expectSameEntries(copy, copyReference);
+
+  // Assignment, self assignment and moves.
+  IndexMap assigned;
+  assigned.set(4, 4);
+  assigned = copy;
+  expectSameEntries(assigned, copyReference);
+  IndexMap &alias = assigned;
+  assigned = alias;
+  expectSameEntries(assigned, copyReference);
+  IndexMap moved = std::move(assigned);
+  expectSameEntries(moved, copyReference);
+  IndexMap moveAssigned;
+  moveAssigned = std::move(moved);
+  expectSameEntries(moveAssigned, copyReference);
+  expectSameEntries(copy, copyReference);
+}
+
+TEST(PersistentIndexMapTest, UpdateValuesVisitsInOrderAndCopiesOnWrite) {
+  IndexMap map;
+  for (unsigned i : {70u, 3u, 1025u, 0u, 64u})
+    map.set(i, i);
+  IndexMap copy = map;
+
+  std::vector<unsigned> visited;
+  map.updateValues([&](unsigned key, unsigned value) {
+    visited.push_back(key);
+    return value;
+  });
+  EXPECT_EQ(visited, (std::vector<unsigned>{0, 3, 64, 70, 1025}));
+  EXPECT_TRUE(map == copy);
+
+  map.updateValues(
+      [&](unsigned key, unsigned value) { return key == 64 ? 1 : value; });
+  expectSameEntries(map, {{0, 0}, {3, 3}, {64, 1}, {70, 70}, {1025, 1025}});
+  expectSameEntries(copy, {{0, 0}, {3, 3}, {64, 64}, {70, 70}, {1025, 1025}});
+}
+
+TEST(PersistentIndexMapTest, EqualityIgnoresStructure) {
+  // Same entries, built differently: one map once held a key that made its
+  // trie taller, the other never did.
+  IndexMap tall;
+  tall.set(1u << 16, 1);
+  tall.set(2, 2);
+  tall.erase(1u << 16);
+  IndexMap flat;
+  flat.set(2, 2);
+  EXPECT_TRUE(tall == flat);
+  EXPECT_TRUE(flat == tall);
+
+  // Same height, with an emptied subtree on one side only.
+  IndexMap a;
+  a.set(2, 2);
+  a.set(40, 4);
+  a.set(700, 7);
+  a.erase(700);
+  IndexMap b;
+  b.set(40, 4);
+  b.set(2, 2);
+  b.set(900, 9);
+  b.erase(900);
+  EXPECT_TRUE(a == b);
+  b.set(40, 5);
+  EXPECT_FALSE(a == b);
+  b.set(40, 4);
+  EXPECT_TRUE(a == b);
+  b.set(41, 4);
+  EXPECT_FALSE(a == b);
+
+  IndexMap empty1, empty2;
+  EXPECT_TRUE(empty1 == empty2);
+  empty2.set(3, 3);
+  empty2.erase(3);
+  EXPECT_TRUE(empty1 == empty2);
+}
+
+TEST(PersistentIndexMapTest, RandomizedAgainstStdMap) {
+  // Run random operations on a family of maps that share structure and check
+  // each against a std::map after every step.
+  std::mt19937 generator(41);
+  std::vector<IndexMap> maps(4);
+  std::vector<ReferenceMap> references(4);
+  auto randomKey = [&]() -> unsigned {
+    switch (generator() % 4) {
+    case 0:
+      return generator() % 64;
+    case 1:
+      return generator() % 2048;
+    case 2:
+      return generator() % 70000;
+    default:
+      return generator() % 300;
+    }
+  };
+
+  for (unsigned step = 0; step < 20000; ++step) {
+    unsigned index = generator() % maps.size();
+    IndexMap &map = maps[index];
+    ReferenceMap &reference = references[index];
+    switch (generator() % 8) {
+    case 0:
+    case 1: {
+      unsigned key = randomKey(), value = generator() % 1000;
+      map.set(key, value);
+      reference[key] = value;
+      break;
+    }
+    case 2: {
+      unsigned key = randomKey(), value = generator() % 1000;
+      EXPECT_EQ(map.insert(key, value), reference.insert({key, value}).second);
+      break;
+    }
+    case 3: {
+      unsigned key = randomKey();
+      EXPECT_EQ(map.erase(key), bool(reference.erase(key)));
+      break;
+    }
+    case 4: {
+      unsigned other = generator() % maps.size();
+      maps[index] = maps[other];
+      references[index] = references[other];
+      break;
+    }
+    case 5: {
+      unsigned modulus = generator() % 5 + 2, delta = generator() % 3;
+      auto fn = [&](unsigned key, unsigned value) {
+        return key % modulus ? value : value + delta;
+      };
+      map.updateValues(fn);
+      for (auto &[key, value] : reference)
+        value = fn(key, value);
+      break;
+    }
+    case 6: {
+      unsigned other = generator() % maps.size();
+      EXPECT_EQ(map == maps[other], reference == references[other]);
+      break;
+    }
+    default: {
+      unsigned key = randomKey();
+      auto iter = reference.find(key);
+      EXPECT_EQ(map.lookup(key), iter == reference.end()
+                                     ? std::nullopt
+                                     : std::optional<unsigned>(iter->second));
+      break;
+    }
+    }
+    if (step % 97 == 0)
+      for (unsigned i = 0; i < maps.size(); ++i)
+        expectSameEntries(maps[i], references[i]);
+  }
+  for (unsigned i = 0; i < maps.size(); ++i)
+    expectSameEntries(maps[i], references[i]);
 }

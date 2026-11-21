@@ -228,7 +228,7 @@ Partition Partition::singleRegion(SILLocation loc, ArrayRef<Element> indices,
     p.pushNewElementRegion(repElement);
     llvm::SmallVector<Element, 32> nonRepElts;
     for (Element index : indices) {
-      p.elementToRegionMap.insert_or_assign(index, repElementRegion);
+      p.elementToRegionMap.set(index, repElementRegion);
       if (index != repElement) {
         p.pushNewElementRegion(index);
         nonRepElts.push_back(index);
@@ -252,7 +252,7 @@ Partition Partition::separateRegions(SILLocation loc, ArrayRef<Element> indices,
 
   auto maxIndex = Element(0);
   for (Element index : indices) {
-    p.elementToRegionMap.insert_or_assign(index, Region(index));
+    p.elementToRegionMap.set(index, Region(index));
     p.pushNewElementRegion(index);
     maxIndex = Element(std::max(maxIndex, index));
   }
@@ -265,7 +265,7 @@ void Partition::markSent(Element val, SendingOperandSet *sendingOperandSet) {
   // First see if our val is tracked. If it is not tracked, insert it and mark
   // its new region as sent.
   if (!isTrackingElement(val)) {
-    elementToRegionMap.insert_or_assign(val, freshLabel);
+    elementToRegionMap.set(val, freshLabel);
     pushNewElementRegion(val);
     regionToSendingOpMap.insert({freshLabel, sendingOperandSet});
     freshLabel = Region(freshLabel + 1);
@@ -274,9 +274,8 @@ void Partition::markSent(Element val, SendingOperandSet *sendingOperandSet) {
   }
 
   // Otherwise, we already have this value in the map. Try to insert it.
-  auto iter1 = elementToRegionMap.find(val);
-  assert(iter1 != elementToRegionMap.end());
-  auto iter2 = regionToSendingOpMap.insert({iter1->second, sendingOperandSet});
+  auto region = elementToRegionMap.at(val);
+  auto iter2 = regionToSendingOpMap.insert({region, sendingOperandSet});
 
   // If we did insert, just return. We were not tracking any state.
   if (iter2.second)
@@ -289,7 +288,7 @@ void Partition::markSent(Element val, SendingOperandSet *sendingOperandSet) {
 bool Partition::undoSend(Element val) {
   // First see if our val is tracked. If it is not tracked, insert it.
   if (!isTrackingElement(val)) {
-    elementToRegionMap.insert_or_assign(val, freshLabel);
+    elementToRegionMap.set(val, freshLabel);
     pushNewElementRegion(val);
     freshLabel = Region(freshLabel + 1);
     canonical = false;
@@ -298,20 +297,20 @@ bool Partition::undoSend(Element val) {
 
   // Otherwise, we already have this value in the map. Remove it from the
   // "sending operand" map.
-  auto iter1 = elementToRegionMap.find(val);
-  assert(iter1 != elementToRegionMap.end());
-  return regionToSendingOpMap.erase(iter1->second);
+  return regionToSendingOpMap.erase(elementToRegionMap.at(val));
 }
 
 void Partition::trackNewElement(Element newElt, bool updateHistory) {
   SWIFT_DEFER { validateRegionToSendingOpMapRegions(); };
 
-  // First try to emplace newElt with fresh_label.
-  auto iter = elementToRegionMap.try_emplace(newElt, freshLabel);
+  // First put newElt into a new region labeled fresh_label, remembering the
+  // region it was in, if any.
+  auto oldRegionIfTracked = elementToRegionMap.lookup(newElt);
+  elementToRegionMap.set(newElt, freshLabel);
 
-  // If we did insert, then we know that the value is completely new. We can
-  // just update the fresh_label, set canonical to false, and return.
-  if (iter.second) {
+  // If newElt was not tracked, then we know that the value is completely new.
+  // We can just update the fresh_label, set canonical to false, and return.
+  if (!oldRegionIfTracked) {
     // Since the value is completely new, add a completely new history node to
     // the history.
     if (updateHistory)
@@ -333,8 +332,7 @@ void Partition::trackNewElement(Element newElt, bool updateHistory) {
   //
   // This is important to ensure that every region in the sendingOpMap is
   // also in elementToRegionMap.
-  auto oldRegion = iter.first->second;
-  iter.first->second = freshLabel;
+  auto oldRegion = *oldRegionIfTracked;
 
   auto getValueFromOtherRegion = [&]() -> std::optional<Element> {
     for (auto pair : elementToRegionMap) {
@@ -370,15 +368,16 @@ void Partition::assignElement(Element oldElt, Element newElt,
 
   SWIFT_DEFER { validateRegionToSendingOpMapRegions(); };
 
-  // First try to emplace oldElt with the newRegion.
+  // First look up newElt's region and the region of oldElt, if it is tracked.
   auto newRegion = elementToRegionMap.at(newElt);
-  auto iter = elementToRegionMap.try_emplace(oldElt, newRegion);
+  auto oldRegionIfTracked = elementToRegionMap.lookup(oldElt);
 
-  // If we did an insert, then we know that oldElt was new to this
+  // If oldElt is not tracked, then we know that oldElt is new to this
   // partition. This means that we update our history for a completely new
   // value in newElt's region. We also set canonical to false to ensure when
   // ever we do a merge/etc, we renumber indices as appropriate.
-  if (iter.second) {
+  if (!oldRegionIfTracked) {
+    elementToRegionMap.set(oldElt, newRegion);
     if (updateHistory) {
       pushNewElementRegion(oldElt);
       pushMergeElementRegions(newElt, oldElt);
@@ -388,7 +387,7 @@ void Partition::assignElement(Element oldElt, Element newElt,
   }
 
   // Otherwise, we did an assign.
-  auto oldRegion = iter.first->second;
+  auto oldRegion = *oldRegionIfTracked;
 
   // First check if oldRegion and newRegion are the same. In such a case, just
   // return.
@@ -398,7 +397,7 @@ void Partition::assignElement(Element oldElt, Element newElt,
   // Otherwise, we need to actually assign. In such a case, we need to see if
   // oldElt was the last element in oldRegion. If so, we need to erase the
   // oldRegion from regionToSendingOpMap.
-  iter.first->second = newRegion;
+  elementToRegionMap.set(oldElt, newRegion);
 
   auto getValueFromOtherRegion = [&]() -> std::optional<Element> {
     for (auto pair : elementToRegionMap) {
@@ -448,9 +447,9 @@ Partition Partition::join(const Partition &fst, Partition &mutableSnd) {
 
     // Check if result has sndEltNumber already within it...
     {
-      auto resultIter = result.elementToRegionMap.find(sndEltNumber);
-      if (result.elementToRegionMap.end() != resultIter) {
-        auto resultRegion = resultIter->second;
+      if (auto resultRegionIfTracked =
+              result.elementToRegionMap.lookup(sndEltNumber)) {
+        auto resultRegion = *resultRegionIfTracked;
 
         // If we do and Element(sndRegionNumber) isn't the same element as
         // sndEltNumber, then we know that sndEltNumber isn't the
@@ -495,9 +494,9 @@ Partition Partition::join(const Partition &fst, Partition &mutableSnd) {
     // since we would have handled that already when we visited our earlier
     // representative element number.
     {
-      auto iter = result.elementToRegionMap.find(Element(sndRegionNumber));
-      if (iter != result.elementToRegionMap.end()) {
-        result.elementToRegionMap.insert({sndEltNumber, iter->second});
+      if (auto repRegion =
+              result.elementToRegionMap.lookup(Element(sndRegionNumber))) {
+        result.elementToRegionMap.insert(sndEltNumber, *repRegion);
         result.pushMergeElementRegions(sndEltNumber, Element(sndRegionNumber));
         // We want fresh_label to always be one element larger than our
         // maximum element.
@@ -513,7 +512,7 @@ Partition Partition::join(const Partition &fst, Partition &mutableSnd) {
     // earlier if we were not due to our traversal being in order. Thus just add
     // this to result.
     assert(sndEltNumber == Element(sndRegionNumber));
-    result.elementToRegionMap.insert({sndEltNumber, sndRegionNumber});
+    result.elementToRegionMap.insert(sndEltNumber, sndRegionNumber);
     result.pushNewElementRegion(sndEltNumber);
     auto sndIter = snd.regionToSendingOpMap.find(sndRegionNumber);
     if (sndIter != snd.regionToSendingOpMap.end()) {
@@ -686,7 +685,7 @@ bool Partition::is_canonical_correct() const {
     return false;
   };
 
-  for (auto &[eltNo, regionNo] : elementToRegionMap) {
+  for (auto [eltNo, regionNo] : elementToRegionMap) {
     // Labels should not exceed fresh_label.
     if (regionNo >= freshLabel)
       return fail(eltNo, 0);
@@ -762,7 +761,7 @@ void Partition::canonicalize() {
 
   // We rely on in-order traversal of labels to ensure that we always take the
   // lowest eltNumber.
-  for (auto &[eltNo, regionNo] : elementToRegionMap) {
+  elementToRegionMap.updateValues([&](Element eltNo, Region regionNo) {
     if (!oldRegionToRelabeledMap.count(regionNo)) {
       // if this is the first time encountering this region label,
       // then this region label should be relabelled to this index,
@@ -770,14 +769,14 @@ void Partition::canonicalize() {
       oldRegionToRelabeledMap.insert_or_assign(regionNo, Region(eltNo));
     }
 
-    // Update this label with either its own index, or a prior index that
-    // shared a region with it.
-    regionNo = oldRegionToRelabeledMap.at(regionNo);
-
     // The maximum index iterated over will be used here to appropriately
     // set fresh_label.
     freshLabel = Region(eltNo + 1);
-  }
+
+    // Update this label with either its own index, or a prior index that
+    // shared a region with it.
+    return oldRegionToRelabeledMap.at(regionNo);
+  });
 
   // Then relabel our regionToSendingOpMap map if we need to by swapping out the
   // old map and updating.
@@ -805,12 +804,12 @@ void Partition::horizontalUpdate(
   if (oldRegion == newRegion)
     return;
 
-  for (auto [element, region] : elementToRegionMap) {
-    if (region == oldRegion) {
-      elementToRegionMap.insert_or_assign(element, newRegion);
-      mergedElements.push_back(element);
-    }
-  }
+  elementToRegionMap.updateValues([&](Element element, Region region) {
+    if (region != oldRegion)
+      return region;
+    mergedElements.push_back(element);
+    return newRegion;
+  });
 }
 
 bool Partition::popHistoryOnce(
@@ -838,11 +837,9 @@ bool Partition::popHistoryOnce(
   case IsolationHistory::Node::AddNewRegionForElement: {
     // We added an element to its own region... so we should remove it and it
     // should be the last element in the region.
-    auto iter = elementToRegionMap.find(head->getFirstArgAsElement());
-    assert(iter != elementToRegionMap.end());
-    Region oldRegion = iter->second;
+    Region oldRegion = elementToRegionMap.at(head->getFirstArgAsElement());
     regionToSendingOpMap.erase(oldRegion);
-    elementToRegionMap.erase(iter);
+    elementToRegionMap.erase(head->getFirstArgAsElement());
     assert(llvm::none_of(elementToRegionMap,
                          [&](std::pair<Element, Region> pair) {
                            return pair.second == oldRegion;
