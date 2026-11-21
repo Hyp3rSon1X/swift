@@ -1070,6 +1070,12 @@ public:
   Region merge(Element fst, Element snd, bool updateHistory = true);
 
 private:
+  /// Implements join. \p shareIntoEmpty enables the shortcut that shares
+  /// \p snd's element map when \p fst has no elements; the unit tests turn it
+  /// off to check the shortcut against the element by element join.
+  static Partition joinImpl(const Partition &fst, Partition &snd,
+                            bool shareIntoEmpty);
+
   /// Pop one history node. Multiple history nodes can make up one PartitionOp
   /// worth of history, so this is called by popHistory.
   ///

@@ -424,7 +424,12 @@ void Partition::assignElement(Element oldElt, Element newElt,
   canonical = false;
 }
 
-Partition Partition::join(const Partition &fst, Partition &mutableSnd) {
+Partition Partition::join(const Partition &fst, Partition &snd) {
+  return joinImpl(fst, snd, /*shareIntoEmpty=*/true);
+}
+
+Partition Partition::joinImpl(const Partition &fst, Partition &mutableSnd,
+                              bool shareIntoEmpty) {
   // READ THIS! Remember, we cannot touch mutableSnd after this point. We just
   // use it to canonicalize to avoid having to copy snd. After this point,
   // please use the const reference snd to keep each other honest.
@@ -439,6 +444,47 @@ Partition Partition::join(const Partition &fst, Partition &mutableSnd) {
   // Push a history join so when processing, we know the next element to
   // process.
   result.pushCFGHistoryJoin(snd.history);
+
+  // If result has no elements, the loop below just rebuilds snd in it: every
+  // element lands in result with its region from snd (snd is canonical, so
+  // each representative is inserted before the elements of its region), the
+  // sent regions of snd stay sent, and freshLabel ends up past the largest
+  // element. Do that directly and share snd's map instead of copying it entry
+  // by entry. This is the whole join for a block with a single predecessor,
+  // so it keeps the entry partition of such a block from duplicating the
+  // exit partition of its predecessor.
+  if (shareIntoEmpty && result.elementToRegionMap.empty()) {
+    assert(result.regionToSendingOpMap.empty() &&
+           "Sent regions without elements?!");
+    result.elementToRegionMap = snd.elementToRegionMap;
+
+    // Record the same history as the loop below.
+    if (result.history.isEnabled()) {
+      for (auto [sndEltNumber, sndRegionNumber] : snd.elementToRegionMap) {
+        if (sndEltNumber == Element(sndRegionNumber))
+          result.pushNewElementRegion(sndEltNumber);
+        else
+          result.pushMergeElementRegions(sndEltNumber,
+                                         Element(sndRegionNumber));
+      }
+    }
+
+    // The loop inserts sent regions in the order of their representatives.
+    SmallVector<std::pair<Region, SendingOperandSet *>, 8> sentRegions(
+        snd.regionToSendingOpMap.begin(), snd.regionToSendingOpMap.end());
+    llvm::sort(sentRegions, [](const auto &lhs, const auto &rhs) {
+      return lhs.first < rhs.first;
+    });
+    for (auto [region, sendingOperandSet] : sentRegions)
+      result.regionToSendingOpMap.insert({region, sendingOperandSet});
+
+    if (auto maxElement = snd.elementToRegionMap.getMaxKey())
+      if (result.freshLabel <= Region(*maxElement))
+        result.freshLabel = Region(*maxElement + 1);
+
+    assert(result.is_canonical_correct());
+    return result;
+  }
 
   // For each (sndEltNumber, sndRegionNumber) in snd_reduced...
   for (auto pair : snd.elementToRegionMap) {

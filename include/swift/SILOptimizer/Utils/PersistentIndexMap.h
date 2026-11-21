@@ -236,6 +236,14 @@ public:
     return !(lhs == rhs);
   }
 
+  /// Return the largest key in the map, or std::nullopt if the map is empty.
+  std::optional<KeyT> getMaxKey() const {
+    unsigned key = 0;
+    if (root && findLast(root, height, 0, key))
+      return KeyT(key);
+    return std::nullopt;
+  }
+
   const_iterator begin() const { return findFirstAtOrAfter(0); }
   const_iterator end() const { return const_iterator(); }
 
@@ -508,6 +516,28 @@ private:
       if (const Node *child = interior->children[i])
         if (findFirst(child, level - 1, base + i * span, from, foundLeaf,
                       foundKey))
+          return true;
+    }
+    return false;
+  }
+
+  static bool findLast(const Node *node, unsigned level, uint64_t base,
+                       unsigned &foundKey) {
+    if (level == 0) {
+      auto *leaf = static_cast<const Leaf *>(node);
+      for (unsigned i = Fanout; i-- > 0;) {
+        if (leaf->values[i] != Absent) {
+          foundKey = unsigned(base + i);
+          return true;
+        }
+      }
+      return false;
+    }
+    auto *interior = static_cast<const Interior *>(node);
+    uint64_t span = spanOfLevel(level);
+    for (unsigned i = Fanout; i-- > 0;) {
+      if (const Node *child = interior->children[i])
+        if (findLast(child, level - 1, base + i * span, foundKey))
           return true;
     }
     return false;

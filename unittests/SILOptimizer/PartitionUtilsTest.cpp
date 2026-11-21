@@ -33,6 +33,18 @@ struct Partition::PartitionTester {
   unsigned getRegion(unsigned elt) const {
     return unsigned(p.elementToRegionMap.at(Element(elt)));
   }
+
+  static unsigned getFreshLabel(const Partition &p) {
+    return unsigned(p.freshLabel);
+  }
+
+  static bool isCanonical(const Partition &p) { return p.canonical; }
+
+  /// Partition::join without the shortcut for joining into a partition that
+  /// has no elements.
+  static Partition joinElementByElement(const Partition &fst, Partition &snd) {
+    return Partition::joinImpl(fst, snd, /*shareIntoEmpty=*/false);
+  }
 };
 
 namespace {
@@ -1282,4 +1294,67 @@ TEST(PersistentIndexMapTest, RandomizedAgainstStdMap) {
   }
   for (unsigned i = 0; i < maps.size(); ++i)
     expectSameEntries(maps[i], references[i]);
+}
+
+TEST(PersistentIndexMapTest, MaxKey) {
+  IndexMap map;
+  EXPECT_EQ(map.getMaxKey(), std::nullopt);
+  map.set(3, 3);
+  EXPECT_EQ(map.getMaxKey(), std::optional<unsigned>(3));
+  map.set(5000, 1);
+  map.set(40, 1);
+  EXPECT_EQ(map.getMaxKey(), std::optional<unsigned>(5000));
+  // An emptied leaf at the end of the trie is skipped.
+  map.erase(5000);
+  EXPECT_EQ(map.getMaxKey(), std::optional<unsigned>(40));
+  map.erase(40);
+  map.erase(3);
+  EXPECT_EQ(map.getMaxKey(), std::nullopt);
+}
+
+TEST(PartitionUtilsTest, JoinIntoEmptyPartition) {
+  // Joining into a partition without elements takes the other partition as it
+  // is, and records the history an element by element join would.
+  llvm::BumpPtrAllocator allocator;
+  Partition::SendingOperandSetFactory factory(allocator);
+  IsolationHistory::Factory historyFactory(allocator, /*enabled=*/true);
+  auto *sendingOperand = reinterpret_cast<Operand *>(uintptr_t(0x1000));
+
+  Partition p(historyFactory.get());
+  p.trackNewElement(Element(3));
+  p.trackNewElement(Element(1));
+  p.trackNewElement(Element(7));
+  p.assignElement(Element(5), Element(1));
+  p.merge(Element(7), Element(3));
+  p.markSent(Element(7), factory.get(sendingOperand));
+  p.markSent(Element(9), factory.get(sendingOperand));
+  unsigned historySize = p.historySize();
+
+  Partition empty(historyFactory.get());
+  Partition result = Partition::join(empty, p);
+  PartitionTester tester(result);
+  EXPECT_EQ(tester.getRegion(1), 1u);
+  EXPECT_EQ(tester.getRegion(3), 3u);
+  EXPECT_EQ(tester.getRegion(5), 1u);
+  EXPECT_EQ(tester.getRegion(7), 3u);
+  EXPECT_EQ(tester.getRegion(9), 9u);
+  EXPECT_FALSE(result.isSent(Element(1)));
+  EXPECT_FALSE(result.isSent(Element(5)));
+  EXPECT_TRUE(result.isSent(Element(3)));
+  EXPECT_TRUE(result.isSent(Element(7)));
+  EXPECT_TRUE(result.isSent(Element(9)));
+  EXPECT_EQ(PartitionTester::getFreshLabel(result), 10u);
+  EXPECT_TRUE(PartitionTester::isCanonical(result));
+  // One node per element on top of the history taken over from p.
+  EXPECT_EQ(result.historySize(), historySize + 5);
+  EXPECT_TRUE(Partition::equals(result, p));
+
+  // The element by element join builds the same partition and history.
+  Partition otherEmpty(historyFactory.get());
+  Partition elementByElement =
+      PartitionTester::joinElementByElement(otherEmpty, p);
+  EXPECT_TRUE(Partition::equals(elementByElement, result));
+  EXPECT_EQ(PartitionTester::getFreshLabel(elementByElement), 10u);
+  EXPECT_TRUE(PartitionTester::isCanonical(elementByElement));
+  EXPECT_EQ(elementByElement.historySize(), result.historySize());
 }
