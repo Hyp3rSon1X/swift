@@ -842,6 +842,27 @@ private:
   /// must be reestablished by a call to canonicalize().
   bool canonical;
 
+  /// While the partition is not canonical: true if regions that existed when
+  /// it last was canonical may have lost or gained elements, so that
+  /// canonicalize() must relabel every element.
+  ///
+  /// Otherwise, all that happened since is that untracked elements were added
+  /// (see noteAddingElement), every region that existed then is still
+  /// canonical, and canonicalize() only relabels the regions created since,
+  /// which contain only added elements. That keeps canonicalize()
+  /// proportional to the number of added elements instead of to the size of
+  /// the partition; the dataflow canonicalizes the exit partition of every
+  /// block it visits.
+  bool needsFullCanonicalization = false;
+
+  /// While the partition is not canonical: freshLabel when it last was. Every
+  /// label below this already labeled a region then.
+  Region freshLabelWhenCanonical = Region(0);
+
+  /// While the partition is not canonical and needsFullCanonicalization is
+  /// false: the elements added since it last was.
+  SmallVector<Element, 2> elementsAddedSinceCanonical;
+
 public:
   Partition(IsolationHistory history)
       : elementToRegionMap(), history(history), canonical(true) {}
@@ -849,7 +870,8 @@ public:
   /// 1-arg constructor used when canonicality will be immediately invalidated,
   /// so set to false to begin with
   Partition(IsolationHistory history, bool canonical)
-      : elementToRegionMap(), history(history), canonical(canonical) {}
+      : elementToRegionMap(), history(history), canonical(canonical),
+        needsFullCanonicalization(!canonical) {}
 
   /// Return a new Partition that has a single region containing the elements of
   /// \p indices.
@@ -1087,8 +1109,49 @@ private:
   /// routine goes through the element -> region map and transforms the
   /// partition state to restore this property.
   ///
-  /// This runs in linear time.
+  /// This runs in linear time, or in time proportional to the number of
+  /// elements added since the partition was last canonical if that is all
+  /// that changed (see needsFullCanonicalization).
   void canonicalize();
+
+  /// The part of canonicalize() for a partition that only had untracked
+  /// elements added to it since it was last canonical.
+  void canonicalizeAddedElements();
+
+  /// Called by operations that are about to make the partition
+  /// non-canonical. Starts recording from a canonical partition.
+  void beginNonCanonicalChange() {
+    if (!canonical)
+      return;
+    needsFullCanonicalization = false;
+    freshLabelWhenCanonical = freshLabel;
+    elementsAddedSinceCanonical.clear();
+  }
+
+  /// Called before the untracked \p element is put into the region labeled
+  /// \p region, which is either freshLabel or the region of a tracked element.
+  void noteAddingElement(Element element, Region region) {
+    beginNonCanonicalChange();
+    if (needsFullCanonicalization)
+      return;
+    // An element smaller than the label of a region that was canonical
+    // becomes that region's new label, and so do the region's other elements,
+    // which only a walk over all elements finds.
+    if (region < freshLabelWhenCanonical &&
+        unsigned(element) < unsigned(region)) {
+      needsFullCanonicalization = true;
+      elementsAddedSinceCanonical.clear();
+      return;
+    }
+    elementsAddedSinceCanonical.push_back(element);
+  }
+
+  /// Called before tracked elements change regions.
+  void noteChangingRegions() {
+    beginNonCanonicalChange();
+    needsFullCanonicalization = true;
+    elementsAddedSinceCanonical.clear();
+  }
 
   /// Walk the elementToRegionMap updating all elements in the region of \p
   /// targetElement will be changed to now point at \p newRegion.
@@ -1131,6 +1194,7 @@ private:
   ///
   /// Just a helper routine.
   void removeElement(Element e) {
+    noteChangingRegions();
     // We added an element to its own region... so we should remove it and it
     // should be the last element in the region.
     bool result = elementToRegionMap.erase(e);

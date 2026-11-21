@@ -45,6 +45,39 @@ struct Partition::PartitionTester {
   static Partition joinElementByElement(const Partition &fst, Partition &snd) {
     return Partition::joinImpl(fst, snd, /*shareIntoEmpty=*/false);
   }
+
+  static void canonicalize(Partition &p) { p.canonicalize(); }
+
+  static std::vector<std::pair<unsigned, unsigned>>
+  getEntries(const Partition &p) {
+    std::vector<std::pair<unsigned, unsigned>> entries;
+    for (auto [element, region] : p.elementToRegionMap)
+      entries.push_back({unsigned(element), unsigned(region)});
+    return entries;
+  }
+
+  static std::vector<std::pair<unsigned, const void *>>
+  getSentRegions(const Partition &p) {
+    std::vector<std::pair<unsigned, const void *>> regions;
+    for (auto [region, set] : p.regionToSendingOpMap)
+      regions.push_back({unsigned(region), set});
+    return regions;
+  }
+
+  /// Return a copy of \p p whose next canonicalize() walks every element.
+  static Partition withFullCanonicalization(const Partition &p) {
+    Partition copy = p;
+    copy.needsFullCanonicalization = true;
+    copy.elementsAddedSinceCanonical.clear();
+    return copy;
+  }
+
+  static void expectSameState(const Partition &lhs, const Partition &rhs) {
+    EXPECT_EQ(getEntries(lhs), getEntries(rhs));
+    EXPECT_EQ(getSentRegions(lhs), getSentRegions(rhs));
+    EXPECT_EQ(getFreshLabel(lhs), getFreshLabel(rhs));
+    EXPECT_EQ(isCanonical(lhs), isCanonical(rhs));
+  }
 };
 
 namespace {
@@ -1357,4 +1390,91 @@ TEST(PartitionUtilsTest, JoinIntoEmptyPartition) {
   EXPECT_EQ(PartitionTester::getFreshLabel(elementByElement), 10u);
   EXPECT_TRUE(PartitionTester::isCanonical(elementByElement));
   EXPECT_EQ(elementByElement.historySize(), result.historySize());
+}
+
+//===----------------------------------------------------------------------===//
+//                 MARK: Canonicalization and join shortcuts
+//===----------------------------------------------------------------------===//
+
+// Run random sequences of partition mutations and check after each step that
+// canonicalizing only the added elements gives the same partition as the walk
+// over every element, and that joining into an empty partition gives what the
+// element-by-element join would, history included.
+TEST(PartitionUtilsTest, CanonicalizeAndJoinShortcutsMatchFullWalk) {
+  llvm::BumpPtrAllocator allocator;
+  Partition::SendingOperandSetFactory factory(allocator);
+  IsolationHistory::Factory historyFactory(allocator, /*enabled=*/false);
+  IsolationHistory::Factory recordingFactory(allocator, /*enabled=*/true);
+  std::mt19937 generator(41);
+  auto fakeOperand = [](unsigned i) {
+    return reinterpret_cast<Operand *>(uintptr_t(0x1000 + 64 * i));
+  };
+
+  for (unsigned round = 0; round < 400; ++round) {
+    Partition p(historyFactory.get());
+    unsigned numElements = 4 + generator() % 40;
+    auto randomElement = [&] { return Element(generator() % numElements); };
+    auto randomTrackedElement = [&]() -> std::optional<Element> {
+      auto entries = PartitionTester::getEntries(p);
+      if (entries.empty())
+        return std::nullopt;
+      return Element(entries[generator() % entries.size()].first);
+    };
+
+    for (unsigned step = 0; step < 40; ++step) {
+      switch (generator() % 10) {
+      case 0:
+      case 1:
+      case 2:
+        p.trackNewElement(randomElement());
+        break;
+      case 3:
+      case 4:
+        if (auto tracked = randomTrackedElement())
+          p.assignElement(randomElement(), *tracked);
+        break;
+      case 5:
+        if (auto lhs = randomTrackedElement())
+          if (auto rhs = randomTrackedElement())
+            p.merge(*lhs, *rhs);
+        break;
+      case 6:
+        p.markSent(randomElement(), factory.get(fakeOperand(generator() % 5)));
+        break;
+      case 7:
+        p.undoSend(randomElement());
+        break;
+      case 8:
+        PartitionTester::canonicalize(p);
+        break;
+      default:
+        break;
+      }
+
+      Partition shortcut = p;
+      Partition fullWalk = PartitionTester::withFullCanonicalization(p);
+      PartitionTester::canonicalize(shortcut);
+      PartitionTester::canonicalize(fullWalk);
+      PartitionTester::expectSameState(shortcut, fullWalk);
+      if (testing::Test::HasFailure())
+        return;
+
+      // Joining into an empty partition, with and without the shortcut that
+      // shares the other side's map. The empty side records history, so the
+      // history the shortcut replicates is compared as well.
+      Partition empty(recordingFactory.get());
+      Partition snd = p;
+      Partition joined = Partition::join(empty, snd);
+      Partition otherEmpty(recordingFactory.get());
+      Partition otherSnd = p;
+      Partition elementByElement =
+          PartitionTester::joinElementByElement(otherEmpty, otherSnd);
+      PartitionTester::expectSameState(joined, elementByElement);
+      EXPECT_EQ(joined.historySize(), elementByElement.historySize());
+      EXPECT_TRUE(PartitionTester::isCanonical(joined));
+      EXPECT_TRUE(Partition::equals(joined, fullWalk));
+      if (testing::Test::HasFailure())
+        return;
+    }
+  }
 }

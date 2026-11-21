@@ -265,6 +265,7 @@ void Partition::markSent(Element val, SendingOperandSet *sendingOperandSet) {
   // First see if our val is tracked. If it is not tracked, insert it and mark
   // its new region as sent.
   if (!isTrackingElement(val)) {
+    noteAddingElement(val, freshLabel);
     elementToRegionMap.set(val, freshLabel);
     pushNewElementRegion(val);
     regionToSendingOpMap.insert({freshLabel, sendingOperandSet});
@@ -288,6 +289,7 @@ void Partition::markSent(Element val, SendingOperandSet *sendingOperandSet) {
 bool Partition::undoSend(Element val) {
   // First see if our val is tracked. If it is not tracked, insert it.
   if (!isTrackingElement(val)) {
+    noteAddingElement(val, freshLabel);
     elementToRegionMap.set(val, freshLabel);
     pushNewElementRegion(val);
     freshLabel = Region(freshLabel + 1);
@@ -306,6 +308,10 @@ void Partition::trackNewElement(Element newElt, bool updateHistory) {
   // First put newElt into a new region labeled fresh_label, remembering the
   // region it was in, if any.
   auto oldRegionIfTracked = elementToRegionMap.lookup(newElt);
+  if (oldRegionIfTracked)
+    noteChangingRegions();
+  else
+    noteAddingElement(newElt, freshLabel);
   elementToRegionMap.set(newElt, freshLabel);
 
   // If newElt was not tracked, then we know that the value is completely new.
@@ -377,6 +383,7 @@ void Partition::assignElement(Element oldElt, Element newElt,
   // value in newElt's region. We also set canonical to false to ensure when
   // ever we do a merge/etc, we renumber indices as appropriate.
   if (!oldRegionIfTracked) {
+    noteAddingElement(oldElt, newRegion);
     elementToRegionMap.set(oldElt, newRegion);
     if (updateHistory) {
       pushNewElementRegion(oldElt);
@@ -397,6 +404,7 @@ void Partition::assignElement(Element oldElt, Element newElt,
   // Otherwise, we need to actually assign. In such a case, we need to see if
   // oldElt was the last element in oldRegion. If so, we need to erase the
   // oldRegion from regionToSendingOpMap.
+  noteChangingRegions();
   elementToRegionMap.set(oldElt, newRegion);
 
   auto getValueFromOtherRegion = [&]() -> std::optional<Element> {
@@ -779,6 +787,7 @@ Region Partition::merge(Element fst, Element snd, bool updateHistory) {
   Region result = fstRegion;
 
   // Rename snd and snd's entire region to fst's region.
+  noteChangingRegions();
   SmallVector<Element, 32> mergedElements;
   horizontalUpdate(snd, fstRegion, mergedElements);
   auto iter = regionToSendingOpMap.find(sndRegion);
@@ -803,6 +812,18 @@ void Partition::canonicalize() {
   canonical = true;
 
   validateRegionToSendingOpMapRegions();
+  SWIFT_DEFER {
+    needsFullCanonicalization = false;
+    elementsAddedSinceCanonical.clear();
+    // Either path must leave a canonical partition; asserts builds check it.
+    assert(is_canonical_correct());
+  };
+
+  if (!needsFullCanonicalization) {
+    canonicalizeAddedElements();
+    return;
+  }
+
   std::map<Region, Region> oldRegionToRelabeledMap;
 
   // We rely on in-order traversal of labels to ensure that we always take the
@@ -835,8 +856,51 @@ void Partition::canonicalize() {
     assert(iter != oldRegionToRelabeledMap.end());
     regionToSendingOpMap[iter->second] = op;
   }
+}
 
-  assert(is_canonical_correct());
+void Partition::canonicalizeAddedElements() {
+  // Every region that existed when the partition was last canonical still is:
+  // its smallest element is still in it and still its label. So only the
+  // regions labeled since then need a new label, and those contain only added
+  // elements: label each with the smallest of them, as the walk over all
+  // elements in canonicalize() would.
+  SmallVector<std::pair<Region, Element>, 8> newRegionElements;
+  for (Element element : elementsAddedSinceCanonical) {
+    Region region = elementToRegionMap.at(element);
+    if (freshLabelWhenCanonical <= region)
+      newRegionElements.push_back({region, element});
+  }
+  llvm::sort(newRegionElements);
+
+  SmallVector<std::pair<Region, Region>, 8> oldRegionToRelabeled;
+  for (auto [region, element] : newRegionElements) {
+    if (oldRegionToRelabeled.empty() ||
+        oldRegionToRelabeled.back().first != region)
+      oldRegionToRelabeled.push_back({region, Region(element)});
+    elementToRegionMap.set(element, oldRegionToRelabeled.back().second);
+  }
+
+  // Relabel the sent regions in place, like canonicalize() does.
+  if (llvm::any_of(regionToSendingOpMap, [&](const auto &pair) {
+        return freshLabelWhenCanonical <= pair.first;
+      })) {
+    decltype(regionToSendingOpMap) oldMap = std::move(regionToSendingOpMap);
+    for (auto &[oldReg, op] : oldMap) {
+      Region newReg = oldReg;
+      if (freshLabelWhenCanonical <= oldReg) {
+        auto iter = llvm::lower_bound(
+            oldRegionToRelabeled, oldReg,
+            [](const auto &pair, Region r) { return pair.first < r; });
+        assert(iter != oldRegionToRelabeled.end() && iter->first == oldReg);
+        newReg = iter->second;
+      }
+      regionToSendingOpMap[newReg] = op;
+    }
+  }
+
+  // canonicalize() leaves freshLabel just past the largest element.
+  if (auto maxElement = elementToRegionMap.getMaxKey())
+    freshLabel = Region(*maxElement + 1);
 }
 
 void Partition::horizontalUpdate(
