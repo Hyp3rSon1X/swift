@@ -4564,3 +4564,14 @@ func assignableButNotConsumableEndAccessImplicitLifetimeTest(_ x: MyClassWithMov
         x.moveOnlyVarStruct.nonTrivialStruct2 = NonTrivialStruct2()
     }
 }
+
+// An unannotated closure parameter is borrowed if the closure's type says so.
+public func closureCaptureUntypedBorrowedClosureParam() {
+    let _: (borrowing NonTrivialStruct) -> Void = { x2 in
+        // expected-error @-1 {{'x2' cannot be captured by an escaping closure since it is a borrowed parameter}}
+        let f = { // expected-note {{closure capturing 'x2' here}}
+            borrowVal(x2)
+        }
+        f()
+    }
+}

@@ -116,6 +116,27 @@ static bool hasSingletonMetatype(CanType instanceType) {
   return HasSingletonMetatype().visit(instanceType);
 }
 
+/// Returns the ownership that \p param has after lowering. An unannotated
+/// parameter of a closure has the ownership of the corresponding parameter of
+/// the closure's type, which may be inferred, and is shared if neither
+/// specifies one.
+static ValueOwnership getLoweredOwnership(const ParamDecl *param) {
+  auto ownership = param->getValueOwnership();
+  if (auto *closure = dyn_cast<AbstractClosureExpr>(param->getDeclContext())) {
+    auto params = closure->getParameters()->getArray();
+    auto found = llvm::find(params, param);
+    auto closureType = closure->getType();
+    if (auto *fnType =
+            closureType ? closureType->getAs<AnyFunctionType>() : nullptr;
+        fnType && found != params.end())
+      ownership =
+          fnType->getParams()[found - params.begin()].getValueOwnership();
+    if (ownership == ValueOwnership::Default)
+      ownership = ValueOwnership::Shared;
+  }
+  return ownership;
+}
+
 CaptureKind TypeConverter::getDeclCaptureKind(CapturedValue capture,
                                               TypeExpansionContext expansion) {
   if (auto *expr = capture.getPackElement()) {
@@ -143,12 +164,13 @@ CaptureKind TypeConverter::getDeclCaptureKind(CapturedValue capture,
 
   // If this is a noncopyable 'let' constant that is not a shared paramdecl or
   // used by a noescape capture, then we know it is boxed and want to pass it in
-  // its boxed form so we can obey Swift's capture reference semantics.
+  // its boxed form so we can obey Swift's capture reference semantics. An
+  // unannotated closure parameter is shared if the closure's type says so.
   if (!var->supportsMutation()
       && contextTy->isNoncopyable()
       && !capture.isNoEscape()) {
       auto *param = dyn_cast<ParamDecl>(var);
-      if (!param || (param->getValueOwnership() != ValueOwnership::Shared &&
+      if (!param || (getLoweredOwnership(param) != ValueOwnership::Shared &&
                      !param->isSelfParameter())) {
         return CaptureKind::ImmutableBox;
       }
