@@ -88,6 +88,7 @@ func runSimplification(on function: Function, _ context: FunctionPassContext,
   worklist.pushIfNotVisited(contentsOf: function.reversedInstructions)
 
   // Run multiple iterations because cleanupDeadCode can add new candidates to the worklist.
+  var stopped = false
   repeat {
 
     // The core worklist-loop.
@@ -99,7 +100,11 @@ func runSimplification(on function: Function, _ context: FunctionPassContext,
         continue
       }
       if !context.continueWithNextSubpassRun(for: instruction) {
-        return changed
+        // Stop simplifying, but still clean up and do the fix-ups below: the simplifications so far
+        // might have left unreachable blocks, erased blocks, inserted `unreachable`s or changed
+        // stack allocations.
+        stopped = true
+        break
       }
       simplify(instruction, simplifyCtxt)
     }
@@ -107,7 +112,7 @@ func runSimplification(on function: Function, _ context: FunctionPassContext,
     cleanupDeadInstructions(in: function, preserveDebugInfo, context)
     cleanupDeadBlocks(in: function, pushNewCandidatesTo: &worklist, context)
 
-  } while !worklist.isEmpty
+  } while !stopped && !worklist.isEmpty
 
   if context.needFixStackNesting {
     context.fixStackNesting(in: function)
