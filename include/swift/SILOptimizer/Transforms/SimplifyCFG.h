@@ -65,6 +65,19 @@ class SimplifyCFG {
   // some expensive optimizations.
   bool isVeryLargeFunction = false;
 
+  // True if the pass manager stopped the pass (sub-pass bisection or
+  // cancellation).
+  bool stopped = false;
+
+  bool continueWithNextSubpassRun(SILInstruction *forInst = nullptr) {
+    if (transform.continueWithNextSubpassRun(forInst))
+      return true;
+    stopped = true;
+    return false;
+  }
+
+  bool simplifyFunction();
+
   void constFoldingCallback(SILInstruction *I) {
     // If a terminal instruction gets constant folded (like cond_br), it
     // enables further simplify-CFG optimizations.

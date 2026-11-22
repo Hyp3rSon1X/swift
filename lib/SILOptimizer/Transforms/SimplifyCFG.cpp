@@ -471,7 +471,7 @@ bool SimplifyCFG::dominatorBasedSimplifications(SILFunction &Fn,
   llvm::DenseSet<std::pair<SILBasicBlock *, SILBasicBlock *>> ThreadedEdgeSet;
   for (auto &BB : Fn) {
     if (DT->getNode(&BB)) {
-      if (!transform.continueWithNextSubpassRun(BB.getTerminator()))
+      if (!continueWithNextSubpassRun(BB.getTerminator()))
         return Changed;
       // Only handle reachable blocks.
       Changed |= tryDominatorBasedSimplifications(
@@ -485,7 +485,7 @@ bool SimplifyCFG::dominatorBasedSimplifications(SILFunction &Fn,
     return Changed;
 
   for (auto &ThreadInfo : JumpThreadableEdges) {
-    if (!transform.continueWithNextSubpassRun())
+    if (!continueWithNextSubpassRun())
       return Changed;
     if (threadEdge(ThreadInfo)) {
       Changed = true;
@@ -500,7 +500,7 @@ bool SimplifyCFG::simplifyThreadedTerminators() {
   bool HaveChangedCFG = false;
   for (auto &BB : Fn) {
     auto *Term = BB.getTerminator();
-    if (!transform.continueWithNextSubpassRun(Term))
+    if (!continueWithNextSubpassRun(Term))
       return HaveChangedCFG;
     // Simplify a switch_enum.
     if (auto *SEI = dyn_cast<SwitchEnumInst>(Term)) {
@@ -574,7 +574,7 @@ bool SimplifyCFG::dominatorBasedSimplify(DominanceAnalysis *DA) {
   do {
     HasChangedInCurrentIter = false;
 
-    if (!transform.continueWithNextSubpassRun())
+    if (!continueWithNextSubpassRun())
       return Changed;
 
     // Do dominator based simplification of terminator condition. This does not
@@ -599,8 +599,10 @@ bool SimplifyCFG::dominatorBasedSimplify(DominanceAnalysis *DA) {
     // simplifySwitchEnumToSelectEnum.
     // simplifyArgs does use the dominator tree, though.
     for (auto &BB : Fn) {
-      if (!transform.continueWithNextSubpassRun(BB.getTerminator()))
-        return Changed;
+      // Include this iteration's changes, so that the pass invalidates the
+      // analyses.
+      if (!continueWithNextSubpassRun(BB.getTerminator()))
+        return Changed || HasChangedInCurrentIter;
 
       HasChangedInCurrentIter |= simplifyArgs(&BB);
     }
@@ -610,7 +612,7 @@ bool SimplifyCFG::dominatorBasedSimplify(DominanceAnalysis *DA) {
 
     // Jump thread.
     if (dominatorBasedSimplifications(Fn, DT)) {
-      if (!transform.continueWithNextSubpassRun())
+      if (!continueWithNextSubpassRun())
         return true;
       DominanceInfo *InvalidDT = DT;
       DT = nullptr;
@@ -2780,7 +2782,7 @@ bool SimplifyCFG::simplifyBlocks() {
     // Otherwise, try to simplify the terminator.
     TermInst *TI = BB->getTerminator();
 
-    if (!transform.continueWithNextSubpassRun(TI))
+    if (!continueWithNextSubpassRun(TI))
       return Changed;
 
     switch (TI->getTermKind()) {
@@ -2869,7 +2871,7 @@ bool SimplifyCFG::canonicalizeSwitchEnums() {
   bool Changed = false;
   for (auto &BB : Fn) {
     TermInst *TI = BB.getTerminator();
-    if (!transform.continueWithNextSubpassRun(TI))
+    if (!continueWithNextSubpassRun(TI))
       return Changed;
 
 
@@ -3314,6 +3316,18 @@ static bool splitBBArguments(SILFunction &Fn) {
 }
 
 bool SimplifyCFG::run() {
+  bool Changed = simplifyFunction();
+
+  // A stop (see continueWithNextSubpassRun()) can come after a simplification
+  // made blocks unreachable, but before simplifyBlocks() removed them.
+  if (stopped) {
+    clearWorklist();
+    Changed |= removeUnreachableBlocks(Fn);
+  }
+  return Changed;
+}
+
+bool SimplifyCFG::simplifyFunction() {
 #ifndef SWIFT_ENABLE_SWIFT_IN_SWIFT
   // This pass results in verification failures when Swift sources are not
   // enabled.
@@ -3325,7 +3339,7 @@ bool SimplifyCFG::run() {
   // Disable some expensive optimizations if the function is huge.
   isVeryLargeFunction = (Fn.size() > 10000);
 
-  if (!transform.continueWithNextSubpassRun())
+  if (!continueWithNextSubpassRun())
     return false;
 
   // First remove any block not reachable from the entry.
@@ -3345,7 +3359,7 @@ bool SimplifyCFG::run() {
   findLoopHeaders();
 
   DT = nullptr;
-  if (!transform.continueWithNextSubpassRun())
+  if (!continueWithNextSubpassRun())
     return Changed;
 
   // Perform SROA on BB arguments.
@@ -3353,7 +3367,7 @@ bool SimplifyCFG::run() {
 
   Changed |= simplifyBlocks();
 
-  if (!transform.continueWithNextSubpassRun())
+  if (!continueWithNextSubpassRun())
     return Changed;
 
   // Do simplifications that require the dominator tree to be accurate.
@@ -3370,14 +3384,14 @@ bool SimplifyCFG::run() {
 
   Changed |= dominatorBasedSimplify(DA);
 
-  if (!transform.continueWithNextSubpassRun())
+  if (!continueWithNextSubpassRun())
     return Changed;
 
   DT = nullptr;
   // Now attempt to simplify the remaining blocks.
   Changed |= simplifyBlocks();
 
-  if (!transform.continueWithNextSubpassRun())
+  if (!continueWithNextSubpassRun())
     return Changed;
 
   if (tailDuplicateObjCMethodCallSuccessorBlocks()) {
@@ -3385,7 +3399,7 @@ bool SimplifyCFG::run() {
     simplifyBlocks();
   }
 
-  if (!transform.continueWithNextSubpassRun())
+  if (!continueWithNextSubpassRun())
     return Changed;
 
   if (Fn.getModule().getOptions().VerifyAll)
