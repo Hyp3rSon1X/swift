@@ -211,6 +211,13 @@ static llvm::cl::opt<bool> SILPrintEverySubpass(
     llvm::cl::desc("Print the function before every subpass run of passes that "
                    "have multiple subpasses"));
 
+static llvm::cl::opt<bool> SILCancelKeepInvariantAsserts(
+    "sil-cancel-keep-invariant-asserts", llvm::cl::init(false),
+    llvm::cl::Hidden,
+    llvm::cl::desc("Check the invariants a pass must leave behind (broken "
+                   "infinite loops, complete lifetimes, stack nesting) also in "
+                   "a cancelled compilation"));
+
 static bool isInPrintFunctionList(SILFunction *F) {
   for (const std::string &printFnName : SILPrintFunction) {
     if (printFnName == F->getName())
@@ -1481,6 +1488,25 @@ void SILPassManager::viewCallGraph() {
 //                           SwiftPassInvocation
 //===----------------------------------------------------------------------===//
 
+/// A pass that the pass manager stopped early in a cancelled compilation (see
+/// ASTContext::CancellationFlag) might not have broken infinite loops,
+/// completed lifetimes or fixed the stack nesting. No pass runs after a cancel
+/// and the module is discarded, so these invariants have no consumer any more:
+/// forget them instead of aborting the host process.
+/// -sil-cancel-keep-invariant-asserts keeps the assertions, to find such passes.
+static bool ignoreInvariantsOfStoppedPass(SILPassManager *passManager) {
+  return passManager && !SILCancelKeepInvariantAsserts &&
+         passManager->getModule()->getASTContext().isCancellationRequested();
+}
+
+static void forgetFunctionInvariantsOfStoppedPass(SILPassManager *passManager,
+                                                  SILFunction *function) {
+  if (ignoreInvariantsOfStoppedPass(passManager)) {
+    function->setNeedBreakInfiniteLoops(false);
+    function->setNeedCompleteLifetimes(false);
+  }
+}
+
 void SwiftPassInvocation::startModulePassRun(SILModuleTransform *transform) {
   ASSERT(!this->function && !this->transform && "a pass is already running");
   this->transform = transform;
@@ -1503,6 +1529,7 @@ void SwiftPassInvocation::startFunctionPassRun(SILFunctionTransform *transform) 
   ASSERT(!silCombiner && "didn't clear silCombiner backlink");
   this->transform = transform;
   this->function = transform->getFunction();
+  forgetFunctionInvariantsOfStoppedPass(passManager, this->function);
   ASSERT(!this->function->needBreakInfiniteLoops() && "didn't break infinite loops in previous module pass");
   ASSERT(!this->function->needCompleteLifetimes() && "didn't complete lifetimes in previous module pass");
 }
@@ -1511,6 +1538,7 @@ void SwiftPassInvocation::finishedFunctionPassRun() {
   ASSERT(function && transform && "not running a function pass");
   ASSERT((changeNotifications & SILContext::NotificationKind::FunctionTables) == 0
          && "a function pass must not change function tables");
+  forgetFunctionInvariantsOfStoppedPass(passManager, function);
   ASSERT(!function->needBreakInfiniteLoops() && "didn't break infinite loops");
   ASSERT(!function->needCompleteLifetimes() && "didn't complete lifetimes");
 
@@ -1544,6 +1572,8 @@ void SwiftPassInvocation::finishedInstructionPassRun() {
 }
 
 void SwiftPassInvocation::verifyEverythingIsCleared() {
+  if (ignoreInvariantsOfStoppedPass(passManager))
+    needFixStackNesting = false;
   ASSERT(!needFixStackNesting && "Stack nesting not fixed");
   SILContext::verifyEverythingIsCleared();
 }
