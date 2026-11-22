@@ -93,6 +93,9 @@ private:
   /// Variable to track if the SILCombiner made any changes.
   bool MadeChange;
 
+  /// Set if the pass manager stopped the pass before the worklist was empty.
+  bool stoppedEarly = false;
+
   /// If set to true then the optimizer is free to erase cond_fail instructions.
   bool RemoveCondFails;
 

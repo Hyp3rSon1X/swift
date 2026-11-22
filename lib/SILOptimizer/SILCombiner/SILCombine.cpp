@@ -428,8 +428,12 @@ bool SILCombiner::doOneIteration(SILFunction &F, unsigned Iteration) {
     if (I == nullptr)
       continue;
 
-    if (!parentTransform->continueWithNextSubpassRun(I))
-      return false;
+    // Stop the pass, but still report what this iteration changed, so that
+    // the pass updates the analyses and cleans up the CFG.
+    if (!parentTransform->continueWithNextSubpassRun(I)) {
+      stoppedEarly = true;
+      return MadeChange;
+    }
 
     processInstruction(I, scCanonicalize, MadeChange);
   }
@@ -604,6 +608,8 @@ bool SILCombiner::runOnFunction(SILFunction &F) {
   // Perform iterations until we do not make any changes.
   while (doOneIteration(F, Iteration)) {
     Changed = true;
+    if (stoppedEarly)
+      break;
     ++Iteration;
   }
 
