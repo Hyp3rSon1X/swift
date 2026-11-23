@@ -58,6 +58,7 @@
 #include "llvm/Bitcode/BitcodeWriterPass.h"
 #include "llvm/CodeGen/BasicTTIImpl.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/CompilationCancellation.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/LLVMContext.h"
@@ -900,6 +901,19 @@ bool swift::performLLVM(const IRGenOptions &Opts, DiagnosticEngine &Diags,
 
   Ctxt.setDiagnosticHandler(std::move(OldDiagnosticHandler));
 
+  // Fork-only (swifthost): a cancel during code generation stopped it
+  // part-way (see compileAndWriteLLVM): discard the incomplete output instead
+  // of keeping it.
+  if (Opts.isCancellationRequested()) {
+    consumeError(OutputFile->discard());
+    OutputFile.reset();
+    if (CASIDFile) {
+      CASIDFile.reset();
+      (void)llvm::sys::fs::remove(OutputFilename.str() + ".casid");
+    }
+    return true;
+  }
+
   return res;
 }
 
@@ -939,7 +953,21 @@ bool swift::compileAndWriteLLVM(
       return true;
     }
 
-    EmitPasses.run(*module);
+    {
+      // Fork-only (swifthost; llvm/IR/CompilationCancellation.h exists only
+      // in the fork's llvm-project): a cancellation
+      // (IRGenOptions::CancellationFlag) stops code generation between passes
+      // and inside the longest ones, and the output is then incomplete; the
+      // caller discards it. The flag is attached to this module's context
+      // only: other compilations in the process are unaffected, and each
+      // thread of a multi-threaded compilation attaches it to its own
+      // module's context here.
+      llvm::CancellationScope cancellation(module->getContext(),
+                                           opts.CancellationFlag.get());
+      EmitPasses.run(*module);
+    }
+    if (opts.isCancellationRequested())
+      return true;
     break;
   }
   }
