@@ -32,6 +32,7 @@
 
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -291,8 +292,9 @@ namespace {
     /// Global variables that we've emitted a reference to.
     llvm::DenseSet<const SILGlobalVariable *> GlobalsToEmit;
 
-    /// Referenced differentiability witnesses that need to be emitted.
-    llvm::DenseSet<const SILDifferentiabilityWitness *>
+    /// Referenced differentiability witnesses that need to be emitted, in
+    /// insertion order so that the serialized module is deterministic.
+    llvm::SetVector<const SILDifferentiabilityWitness *>
         DifferentiabilityWitnessesToEmit;
 
     /// Additional functions we might need to serialize.
