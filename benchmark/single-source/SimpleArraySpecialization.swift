@@ -40,10 +40,12 @@ public let benchmarks = [
 
 let xs = SimpleArray<MyClass>(capacity: 100_000)
 
-@_silgen_name("_swift_stdlib_immortalize")
-func _stdlib_immortalize(_ obj: AnyObject)
+func _stdlib_immortalize(_ obj: AnyObject) {
+  _swift_stdlib_immortalize(Unmanaged.passUnretained(obj).toOpaque())
+}
 
 import Foundation
+import SwiftShims
 
 
 public final class MyClass {

@@ -13,6 +13,7 @@
 #include <cstdio>
 
 #include "swift/Runtime/HeapObject.h"
+#include "swift/shims/RuntimeShims.h"
 
 namespace swift {
 
@@ -180,8 +181,12 @@ void RefCounts<SideTableRefCountBits>::incrementUnownedSlow(uint32_t n) {
   // Overflow from side table to a new side table?!
   swift_abortUnownedRetainOverflow();
 }
-  
-SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_API
+
+// Declared in RuntimeShims.h, so clients call this with the C calling
+// convention. It must not be SWIFT_CC(swift): on WebAssembly a swiftcc
+// function takes extra swiftself and swifterror parameters, and a call through
+// the header would not match the definition.
+SWIFT_RUNTIME_STDLIB_API
 void _swift_stdlib_immortalize(void *obj) {
   auto heapObj = reinterpret_cast<HeapObject *>(obj);
   heapObj->refCounts.setIsImmortal(true);
