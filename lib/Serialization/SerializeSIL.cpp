@@ -286,7 +286,9 @@ namespace {
     llvm::DenseMap<const SILFunction *, bool> FuncsToEmit;
 
     bool OnlyReferencedByDebugInfo = false;
-    llvm::DenseSet<const SILFunction *> FuncsToEmitDebug;
+    /// Functions referenced by debug scopes, in insertion order so that the
+    /// serialized module is deterministic.
+    llvm::SetVector<const SILFunction *> FuncsToEmitDebug;
 
     /// Global variables that we've emitted a reference to.
     llvm::DenseSet<const SILGlobalVariable *> GlobalsToEmit;
