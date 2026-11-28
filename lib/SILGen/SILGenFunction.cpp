@@ -1525,6 +1525,12 @@ static bool isCreateExecutorsFunctionAvailable(SILGenModule &SGM) {
   if (ctx.LangOpts.hasFeature(Feature::Embedded))
     return true;
 
+  // WASI programs link the Swift runtime statically from the same SDK whose
+  // _Concurrency module declares swift_createExecutors, so the runtime they
+  // run on always has it.
+  if (ctx.LangOpts.Target.isOSWASI())
+    return true;
+
   if (!ctx.LangOpts.DisableAvailabilityChecking) {
     auto deploymentAvailability = AvailabilityRange::forDeploymentTarget(ctx);
     auto runtimeAvailability = AvailabilityRange::forRuntimeTarget(ctx);
